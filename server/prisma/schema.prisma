@@ -1,0 +1,970 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OfferStatus {
+  pending
+  accepted
+  rejected
+  expired
+  cancelled
+  completed
+}
+
+enum OfferType {
+  custom_job
+  milestone
+  direct_hire
+}
+
+enum MessageType {
+  text
+  image
+  pdf
+  file
+  offer
+  delivery
+}
+
+enum ContractStatus {
+  pending_payment
+  active
+  in_progress
+  delivered
+  revision_requested
+  completed
+  cancelled
+  auto_cancelled
+  disputed
+}
+
+enum UserStatus {
+  active
+  suspended
+  banned
+}
+
+enum DocumentType {
+  NATIONAL_ID
+  DRIVERS_LICENSE
+  INTERNATIONAL_PASSPORT
+  VOTERS_CARD
+  BUSINESS_REGISTRATION
+  UTILITY_BILL
+  TAX_ID
+}
+
+enum VerificationStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum KycStatus {
+  UNVERIFIED
+  PENDING
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum PayoutStatus {
+  pending
+  released
+}
+
+
+enum ExtensionStatus {
+  pending
+  approved
+  rejected
+}
+
+model User {
+  id                   String    @id @default(uuid())
+  email                String    @unique
+  password             String
+  firstName            String
+  lastName             String
+  headline             String?
+  bio                  String?
+  avatar               String?
+  banner               String?
+  location             String?
+  skills               String[]
+  hourlyRate           Decimal?  @db.Decimal(12, 2)
+  isFreelancer         Boolean   @default(false)
+  isBuyer              Boolean   @default(false)
+  isVerified           Boolean   @default(false)
+  isAdmin              Boolean   @default(false)
+  isSuspended          Boolean   @default(false)
+  status               UserStatus @default(active)
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+  sharesMade           Share[]   @relation("SharesMade")
+  sharesReceived       Share[]   @relation("SharesReceived")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  isOnline             Boolean   @default(false)
+  lastActive           DateTime?
+  savedPosts Save[]
+
+  kycStatus            KycStatus @default(UNVERIFIED)
+  kycSubmittedAt       DateTime?
+  kycApprovedAt        DateTime?
+  kycRejectionCount    Int       @default(0)
+
+  profile              Profile?
+  posts                Post[]
+  postLikes            PostLike[]
+  comments             Comment[]
+  connectionsSent      Connection[] @relation("SentConnections")
+  connectionsReceived  Connection[] @relation("ReceivedConnections")
+  jobsPosted           Job[]
+  proposals            Proposal[]
+  contracts            Contract[] @relation("FreelancerContracts")
+  contractsAsBuyer     Contract[] @relation("BuyerContracts")
+  reviewsGiven         Review[] @relation("Reviewer")
+  reviewsReceived      Review[] @relation("Reviewee")
+  disputeReplies       DisputeReply[]
+  filedDisputes        Dispute[] @relation("FiledDisputes")
+  resolvedDisputes     Dispute[] @relation("ResolvedDisputes")
+  messagesSent         Message[] @relation("SentMessages")
+  messagesReceived     Message[] @relation("ReceivedMessages")
+  notifications        Notification[]
+  wallet               Wallet?
+  emailVerifications   EmailVerification[]
+  withdrawalOtps       WithdrawalOtp[]
+  walletTopUpOtps      WalletTopUpOtp[]
+  savedCards           SavedCard[]
+  loginAttempts        LoginAttempt[]
+  sessions             Session[]
+  offersSent           Offer[] @relation("SentOffers")
+  offersReceived       Offer[] @relation("ReceivedOffers")
+  violations           ContentViolation[]
+  deliveries           Delivery[] @relation("FreelancerDeliveries")
+  verificationRequest  VerificationRequest?
+  documentVerification DocumentVerification?
+  followers            Follower[] @relation("UserFollowers")
+  following            Follower[] @relation("UserFollowing")
+  earningBadge         EarningBadge?
+  blockedContacts      BlockedContact[]       @relation("BlockedBy")
+  blockedBy            BlockedContact[]       @relation("Blocked")
+  archivedConversations ArchivedConversation[] @relation("ArchivedBy")
+  archivedByOthers     ArchivedConversation[] @relation("ArchivedWith")
+  callsMade            VideoCall[]            @relation("CallsMade")
+  callsReceived        VideoCall[]            @relation("CallsReceived")
+  profileViewsReceived ProfileView[] @relation("ProfileViewed")
+  profileViewsMade     ProfileView[] @relation("ProfileViewer")
+  postImpressions      PostImpression[]
+  extensionRequests    ExtensionRequest[] @relation("RequestedExtensions")
+  tipsSent     Tip[] @relation("BuyerTips")
+  tipsReceived Tip[] @relation("FreelancerTips")
+  hostedRooms      VivaRoom[]            @relation(name: "HostedRooms")
+  roomParticipants VivaRoomParticipant[]
+  roomMessages     VivaRoomMessage[]
+  @@map("users")
+}
+
+model DocumentVerification {
+  id               String             @id @default(cuid())
+  userId           String             @unique
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentType     DocumentType
+  frontImageUrl    String?
+  backImageUrl     String?
+  selfieUrl        String?
+  fullName         String?
+  documentNumber   String?
+  dateOfBirth      DateTime?
+  expiryDate       DateTime?
+  country          String?
+  address          String?
+  status           VerificationStatus @default(PENDING)
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  notes            String?
+  submittedAt      DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([status])
+  @@index([userId])
+  @@map("document_verifications")
+}
+
+model Profile {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experience     Json?
+  education      Json?
+  certifications Json?
+  portfolio      Json?
+  languages      String[]
+  availability   String?
+  phone          String?
+  company        String?
+  website        String?
+  linkedin       String?
+  twitter        String?
+  github         String?
+
+  @@map("profiles")
+}
+
+model VerificationRequest {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  idType       String
+  idNumber     String?
+  idImageFront String
+  idImageBack  String?
+  selfieImage  String?
+  status       String   @default("pending")
+  reviewedBy   String?
+  reviewNote   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("verification_requests")
+}
+
+model Follower {
+  id          String   @id @default(uuid())
+  followerId  String
+  follower    User     @relation("UserFollowers", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User     @relation("UserFollowing", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+  @@map("followers")
+}
+
+model EarningBadge {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  totalEarned   Decimal  @default(0) @db.Decimal(12, 2)
+  totalSpent    Decimal  @default(0) @db.Decimal(12, 2)
+  tier          String   @default("newcomer")
+  tierUpdatedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("earning_badges")
+}
+model Post {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String   @default("text")
+  content      String
+  media        String[]
+  linkUrl      String?
+  linkTitle    String?
+  linkImage    String?
+  linkDesc     String?
+  linkDomain   String?  
+  hashtags     String[] @default([])  
+  mentions     String[] @default([])  
+  likes        Int      @default(0)
+  comments     Int      @default(0)           
+  shares       Int      @default(0)
+  sharesList   Share[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  impressions  PostImpression[]
+  postLikes    PostLike[]
+  commentsList Comment[] @relation("PostComments")
+  savesList    Save[]    @relation("PostSaves")
+
+  @@map("posts")
+}
+
+model PostLike {
+  id        String   @id @default(uuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@map("post_likes")
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  postId    String
+  userId    String
+  content   String
+  parentId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  post      Post     @relation("PostComments", fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    Comment? @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[] @relation("CommentReplies")
+
+  @@index([postId])
+  @@index([userId])
+  @@index([parentId])
+  @@map("comments")
+}
+
+model Save {
+  id        String   @id @default(uuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  post      Post     @relation("PostSaves", fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([userId])
+  @@index([postId])
+  @@map("saves")
+}
+
+model Connection {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation("SentConnections", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User     @relation("ReceivedConnections", fields: [receiverId], references: [id], onDelete: Cascade)
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([senderId, receiverId])
+  @@map("connections")
+}
+
+model Job {
+  id          String   @id @default(uuid())
+  buyerId     String
+  buyer       User     @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  skills      String[]
+  budget      Decimal? @db.Decimal(12, 2)
+  budgetType  String   @default("fixed")
+  status      String   @default("open")
+  location    String?
+  media       String[]
+  linkUrl     String?
+  linkTitle   String?
+  linkImage   String?
+  linkDesc    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  featured  Boolean @default(false)
+  proposals   Proposal[]
+  contracts   Contract[]
+  offers      Offer[]
+
+  @@map("jobs")
+}
+
+model Proposal {
+  id               String   @id @default(uuid())
+  jobId            String
+  job              Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  freelancerId     String
+  freelancer       User     @relation(fields: [freelancerId], references: [id], onDelete: Cascade)
+  coverLetter      String
+  proposedBudget   Decimal? @db.Decimal(12, 2)
+  proposedDuration Int?
+  proposedRate     Decimal? @db.Decimal(12, 2)
+  duration         String?
+  status           String   @default("pending")
+  contract        Contract?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("proposals")
+}
+
+model Offer {
+  id           String      @id @default(uuid())
+  type         OfferType   @default(direct_hire)
+  senderId     String
+  sender       User        @relation("SentOffers", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId   String
+  receiver     User        @relation("ReceivedOffers", fields: [receiverId], references: [id], onDelete: Cascade)
+  jobId        String?
+  job          Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  contractId   String?
+  contract     Contract?   @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  amount       Decimal     @db.Decimal(12, 2)
+  title        String      @default("")
+  description  String
+  status       OfferStatus @default(pending)
+  escrowed     Boolean     @default(false)
+  durationDays Int         @default(7)
+  revisions    Int         @default(2)
+  deliverables String[]    @default([])
+  milestones   Json?
+  expiresAt    DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  messageId    String?     @unique
+  message      Message?    @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@map("offers")
+}
+
+model Contract {
+  id               String         @id @default(uuid())
+  jobId            String?
+  title            String?
+  job              Job?           @relation(fields: [jobId], references: [id], onDelete: SetNull)
+   proposalId       String?   @unique
+  proposal         Proposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
+  buyerId          String
+  buyer            User           @relation("BuyerContracts", fields: [buyerId], references: [id], onDelete: Cascade)
+  freelancerId     String
+  freelancer       User           @relation("FreelancerContracts", fields: [freelancerId], references: [id], onDelete: Cascade)
+  amount           Decimal        @db.Decimal(12, 2)
+  status           ContractStatus @default(pending_payment)
+  milestones       Json?
+  startDate        DateTime       @default(now())
+  endDate          DateTime?
+  duration         Int?
+  revisionsTotal Int @default(3)
+  revisionsUsed    Int?           @default(0)
+  revisionFeedback  String?
+  deadline         DateTime?
+  dueDate          DateTime?
+  graceEndDate     DateTime?
+  dispute          Dispute?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  escrowAmount     Decimal        @default(0) @db.Decimal(12, 2)
+  deliveryNote     String?
+  deliveryFiles    String[]       @default([])
+  deliveryFileMeta Json?
+  deliveredAt      DateTime?
+  revisionCount    Int            @default(0)
+  maxRevisions     Int            @default(2)
+
+  payoutStatus     PayoutStatus?
+  payoutDate       DateTime?
+  disputeWindowEndsAt  DateTime?
+  freelancerPayout Decimal?       @db.Decimal(12, 2)
+  platformFee      Decimal?       @db.Decimal(12, 2)
+
+  payments         Payment[]
+  reviews          Review[]
+  offers           Offer[]
+  deliveries       Delivery[]
+  extensionRequests    ExtensionRequest[]
+  tips             Tip[]
+
+  @@map("contracts")
+}
+
+model ExtensionRequest {
+  id          String          @id @default(uuid())
+  contractId  String
+  contract    Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  requestedBy String
+  requestedByUser User        @relation("RequestedExtensions", fields: [requestedBy], references: [id], onDelete: Cascade)
+  days        Int
+  reason      String?
+  status      ExtensionStatus @default(pending)
+  approvedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([contractId])
+  @@index([status])
+  @@map("extension_requests")
+}
+
+
+
+
+model Dispute {
+  id           String        @id @default(uuid())
+  contractId   String        @unique
+  contract     Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  filedById    String
+  filedBy      User          @relation("FiledDisputes", fields: [filedById], references: [id])
+  reason       String
+  evidence     String[]      @default([])
+  evidenceMeta Json?
+  status       String        @default("open")
+  resolution   String?
+  adminNotes   String?
+  resolvedAt   DateTime?
+  resolvedById String?
+  resolvedBy   User?         @relation("ResolvedDisputes", fields: [resolvedById], references: [id])
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  filedDuringWindow    Boolean    @default(false)
+  replies      DisputeReply[]
+
+  @@index([contractId])
+  @@index([status])
+  @@index([filedById])
+  @@map("disputes")
+}
+
+model DisputeReply {
+  id          String   @id @default(uuid())
+  disputeId   String
+  dispute     Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  senderId    String
+  sender      User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content     String
+  files       String[] @default([])
+  fileMeta    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([disputeId])
+  @@index([senderId])
+  @@map("dispute_replies")
+}
+
+
+model Delivery {
+  id           String   @id @default(uuid())
+  contractId   String
+  freelancerId String
+  note         String?
+  files        String[]
+  fileMeta     Json?
+  status       String   @default("pending")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  contract     Contract @relation(fields: [contractId], references: [id])
+  freelancer   User     @relation("FreelancerDeliveries", fields: [freelancerId], references: [id])
+  autoAcceptAt DateTime?
+  @@map("deliveries")
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  contractId  String
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(12, 2)
+  paystackRef String?
+  status      String   @default("pending")
+  type        String   @default("milestone")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("payments")
+}
+
+model Review {
+  id          String   @id @default(uuid())
+  contractId  String
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  reviewerId  String
+  reviewer    User     @relation("Reviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+  revieweeId  String
+  reviewee    User     @relation("Reviewee", fields: [revieweeId], references: [id], onDelete: Cascade)
+  rating      Int
+  comment     String?
+  projectName String?
+  createdAt   DateTime @default(now())
+
+  @@map("reviews")
+}
+
+model Message {
+  id         String      @id @default(uuid())
+  senderId   String
+  sender     User        @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User        @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  content    String
+  type       MessageType @default(text)
+  fileUrl    String?
+  fileName   String?
+  fileSize   Int?
+  mimeType   String?
+  isRead     Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+  offer      Offer?
+
+  @@map("messages")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model Wallet {
+  id                   String        @id @default(uuid())
+  userId               String?       @unique
+  user                 User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance              Decimal       @default(0) @db.Decimal(12, 2)
+  escrow               Decimal       @default(0) @db.Decimal(12, 2)
+  currency             String        @default("NGN")
+  lastWithdrawalAt     DateTime?
+  dailyWithdrawalSum   Decimal       @default(0) @db.Decimal(12, 2)
+  dailyWithdrawalDate  DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  transactions Transaction[]
+
+  @@map("wallets")
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  walletId    String
+  wallet      Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  contractId  String?
+  type        String
+  amount      Decimal  @db.Decimal(12, 2)
+  description String?
+  status      String   @default("completed")
+  paystackRef String?
+  metadata    Json?
+  adminNotes  String?
+  createdAt   DateTime @default(now())
+
+  @@map("transactions")
+}
+
+model ContentViolation {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String
+  content    String?
+  fileUrl    String?
+  confidence Float?
+  autoBanned Boolean  @default(false)
+  reviewed   Boolean  @default(false)
+  reviewedBy String?
+  createdAt  DateTime @default(now())
+
+  @@map("content_violations")
+}
+
+model EmailVerification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("email_verifications")
+}
+
+model WithdrawalOtp {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code        String
+  expiresAt   DateTime
+  used        Boolean  @default(false)
+  amount      Decimal  @db.Decimal(12, 2)
+  attempts    Int      @default(0)
+  ipAddress   String?
+  bankDetails Json
+  createdAt   DateTime @default(now())
+
+  @@map("withdrawal_otps")
+}
+
+model WalletTopUpOtp {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code        String
+  expiresAt   DateTime
+  used        Boolean  @default(false)
+  amount      Decimal  @db.Decimal(12, 2)
+  paystackRef String?
+  createdAt   DateTime @default(now())
+
+  @@map("wallet_topup_otps")
+}
+
+model SavedCard {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  last4       String
+  brand       String
+  expiryMonth String
+  expiryYear  String
+  authCode    String
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@map("saved_cards")
+}
+
+model LoginAttempt {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email     String
+  ipAddress String
+  userAgent String?
+  success   Boolean
+  createdAt DateTime @default(now())
+
+  @@map("login_attempts")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  ipAddress String
+  userAgent String?
+  isActive  Boolean  @default(true)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+   lastUsedAt DateTime @default(now())
+
+  @@map("sessions")
+}
+
+model BlockedContact {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker   User     @relation("BlockedBy", fields: [blockerId], references: [id])
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id])
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+model ArchivedConversation {
+  id          String   @id @default(uuid())
+  userId      String
+  otherUserId String
+  createdAt   DateTime @default(now())
+
+  user      User @relation("ArchivedBy", fields: [userId], references: [id])
+  otherUser User @relation("ArchivedWith", fields: [otherUserId], references: [id])
+
+  @@unique([userId, otherUserId])
+  @@index([userId])
+  @@index([otherUserId])
+}
+
+model VideoCall {
+  id         String    @id @default(uuid())
+  callerId   String
+  receiverId String
+  roomId     String    @unique
+  callType   String    @default("video")
+  status     String    @default("ringing")
+  duration   Int?
+  startedAt  DateTime
+  endedAt    DateTime?
+
+  caller   User @relation("CallsMade", fields: [callerId], references: [id])
+  receiver User @relation("CallsReceived", fields: [receiverId], references: [id])
+
+  @@index([callerId])
+  @@index([receiverId])
+  @@index([status])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+model Share {
+  id          String   @id @default(uuid())
+  postId      String
+  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  sharedById  String
+  sharedBy    User     @relation("SharesMade", fields: [sharedById], references: [id], onDelete: Cascade)
+  recipientId String?
+  recipient   User?    @relation("SharesReceived", fields: [recipientId], references: [id], onDelete: SetNull)
+  shareLink   String   @unique @default(uuid())
+  createdAt   DateTime @default(now())
+
+  @@index([postId])
+  @@index([sharedById])
+  @@index([recipientId])
+  @@index([shareLink])
+  @@map("shares")
+}
+
+model PostImpression {
+  id        String   @id @default(uuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  viewerId  String
+  viewer    User     @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+  viewedAt  DateTime @default(now())
+
+  @@unique([postId, viewerId])
+  @@index([postId])
+  @@index([viewerId])
+  @@index([viewedAt])
+  @@map("post_impressions")
+}
+
+model ProfileView {
+  id          String   @id @default(uuid())
+  viewedId    String
+  viewed      User     @relation("ProfileViewed", fields: [viewedId], references: [id], onDelete: Cascade)
+  viewerId    String
+  viewer      User     @relation("ProfileViewer", fields: [viewerId], references: [id], onDelete: Cascade)
+  viewedAt    DateTime @default(now())
+
+  @@unique([viewedId, viewerId])
+  @@index([viewedId])
+  @@index([viewerId])
+  @@index([viewedAt])
+  @@map("profile_views")
+}
+
+model Tip {
+  id           String   @id @default(uuid())
+  contractId   String
+  contract     Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  buyerId      String
+  buyer        User     @relation("BuyerTips", fields: [buyerId], references: [id], onDelete: Cascade)
+  freelancerId String
+  freelancer   User     @relation("FreelancerTips", fields: [freelancerId], references: [id], onDelete: Cascade)
+  amount       Decimal  @db.Decimal(12, 2)
+  message      String?
+  createdAt    DateTime @default(now())
+
+  @@index([contractId])
+  @@index([buyerId])
+  @@map("tips")
+}
+
+
+model VivaRoom {
+  id            String   @id @default(uuid())
+  title         String
+  description   String?
+  status        VivaRoomStatus @default(live)
+  visibility    VivaRoomVisibility @default(public)
+  
+  hostId        String
+  host          User     @relation(fields: [hostId], references: [id], name: "HostedRooms")
+  
+  participants  VivaRoomParticipant[]
+  messages      VivaRoomMessage[]
+  
+  startedAt     DateTime @default(now())
+  endedAt       DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status])
+  @@index([hostId])
+  @@index([visibility])
+  @@index([startedAt])
+}
+
+model VivaRoomParticipant {
+  id        String   @id @default(uuid())
+  roomId    String
+  room      VivaRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  role      VivaRoomRole @default(listener)
+  isMuted   Boolean  @default(false)
+  isSpeaking Boolean @default(false)
+  handRaised Boolean @default(false)
+  
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+
+  @@unique([roomId, userId])
+  @@index([roomId])
+  @@index([userId])
+  @@index([role])
+}
+
+model VivaRoomMessage {
+  id        String   @id @default(uuid())
+  roomId    String
+  room      VivaRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([roomId])
+  @@index([createdAt])
+}
+
+enum VivaRoomStatus {
+  live
+  ended
+}
+
+enum VivaRoomVisibility {
+  public
+  followers_only
+  private
+}
+
+enum VivaRoomRole {
+  host
+  co_host
+  speaker
+  listener
+}

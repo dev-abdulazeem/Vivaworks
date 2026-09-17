@@ -1,0 +1,37 @@
+/* Hide scrollbar for stories */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Smooth animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s ease-out forwards;
+}
+
+/* Custom focus ring */
+input:focus, textarea:focus {
+  outline: none;
+}
+
+/* Image hover zoom */
+.image-zoom {
+  transition: transform 0.5s ease;
+}
+.image-zoom:hover {
+  transform: scale(1.05);
+}

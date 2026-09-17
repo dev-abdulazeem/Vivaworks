@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vivawork-api
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - DATABASE_URL="postgresql://postgres:Lilmaya490@localhost:5432/vivawork_db?schema=public"
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - BREVO_API_KEY=${BREVO_API_KEY}
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY}
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./src:/app/src
+      - /app/node_modules
+    networks:
+      - vivawork-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: vivawork-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: vivawork_user
+      POSTGRES_PASSWORD: vivawork_pass
+      POSTGRES_DB: vivawork_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vivawork-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vivawork_user -d vivawork_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: vivawork-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - vivawork-network
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: vivawork-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+    networks:
+      - vivawork-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  vivawork-network:
+    driver: bridge
