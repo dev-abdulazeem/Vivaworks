@@ -1,62 +1,109 @@
 import xgboost as xgb
-import numpy as np
 import pandas as pd
+import numpy as np
+from sklearn.ensemble import IsolationForest
 from sklearn.model_selection import train_test_split
 import joblib
+import json
 
-def train_fraud_model(csv_path: str = "training_data.csv"):
+# Features we use (hour_of_day is new!)
+FEATURES = [
+    'amount',
+    'account_age_days',
+    'total_earnings',
+    'withdrawal_count_30d',
+    'avg_withdrawal_amount',
+    'amount_vs_earnings_ratio',
+    'hour_of_day'
+]
+
+def train_with_synthetic_data(csv_path="training_data.csv"):
     """
-    Train XGBoost on historical withdrawal data
-    CSV columns: amount, account_age_days, total_earnings, withdrawal_count_30d, 
-                 avg_withdrawal_amount, is_fraud (0 or 1)
+    TRAINING MODE 1: You have synthetic/labeled data
+    Uses XGBoost supervised learning
     """
+    print("=" * 50)
+    print("MODE 1: Supervised training (with labels)")
+    print("=" * 50)
     
-    # Load your historical data
     df = pd.read_csv(csv_path)
+    X = df[FEATURES]
+    y = df['is_fraud']
     
-    # Features (what the model looks at)
-    features = ['amount', 'account_age_days', 'total_earnings', 
-                'withdrawal_count_30d', 'avg_withdrawal_amount']
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
     
-    X = df[features]
-    y = df['is_fraud']  # 1 = fraud, 0 = legitimate
-    
-    # Split for training/testing
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Train
     model = xgb.XGBClassifier(
         max_depth=6,
         learning_rate=0.1,
-        n_estimators=100,
-        objective='binary:logistic'
+        n_estimators=150,
+        scale_pos_weight=len(y_train[y_train==0]) / len(y_train[y_train==1]),  # Handle imbalance
+        random_state=42
     )
-    
     model.fit(X_train, y_train)
     
-    # Evaluate
-    accuracy = model.score(X_test, y_test)
-    print(f"Model accuracy: {accuracy:.2%}")
+    test_acc = model.score(X_test, y_test)
+    print(f"✅ Test accuracy: {test_acc:.2%}")
     
-    # Save for the risk engine to use
     model.save_model("risk_model.json")
-    print("Model saved to risk_model.json")
     
+    # Save feature list (risk engine needs this)
+    with open("model_features.json", "w") as f:
+        json.dump(FEATURES, f)
+    
+    print_feature_importance(model)
     return model
 
+def train_anomaly_only(csv_path="training_data.csv"):
+    """
+    TRAINING MODE 2: No labels? Only normal data? Use this.
+    Isolation Forest learns 'normal' and flags outliers.
+    """
+    print("=" * 50)
+    print("MODE 2: Anomaly detection (no labels needed)")
+    print("=" * 50)
+    
+    df = pd.read_csv(csv_path)
+    # Train ONLY on normal transactions
+    normal_data = df[df['is_fraud'] == 0][FEATURES]
+    
+    iso_forest = IsolationForest(
+        contamination=0.05,  # Expect ~5% of transactions to be anomalies
+        random_state=42,
+        n_estimators=200
+    )
+    iso_forest.fit(normal_data)
+    
+    joblib.dump(iso_forest, "anomaly_model.pkl")
+    print("✅ Anomaly model saved to anomaly_model.pkl")
+    
+    # Test how well it catches the synthetic fraud
+    X_test = df[FEATURES]
+    predictions = iso_forest.predict(X_test)  # -1 = anomaly, 1 = normal
+    detected = (predictions[df['is_fraud'] == 1] == -1).mean()
+    print(f"🎯 Caught {detected:.1%} of fraud cases in test data")
+    
+    return iso_forest
+
+def print_feature_importance(model):
+    importance = pd.DataFrame({
+        'feature': FEATURES,
+        'importance': model.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    print("\n📊 What the model cares about most:")
+    for _, row in importance.iterrows():
+        bar = "█" * int(row['importance'] * 50)
+        print(f"  {row['feature']:30s} {bar} {row['importance']:.3f}")
+
 if __name__ == "__main__":
-    # Create sample training data if you don't have real data yet
-    sample_data = {
-        'amount': [100, 5000, 200, 50, 3000, 150, 8000, 75],
-        'account_age_days': [365, 10, 200, 500, 5, 180, 15, 400],
-        'total_earnings': [5000, 200, 3000, 8000, 100, 2500, 500, 6000],
-        'withdrawal_count_30d': [2, 5, 1, 0, 8, 1, 6, 0],
-        'avg_withdrawal_amount': [100, 1000, 200, 50, 500, 150, 2000, 75],
-        'is_fraud': [0, 1, 0, 0, 1, 0, 1, 0]  # 1 = fraud
-    }
+    import os
+    if not os.path.exists("training_data.csv"):
+        print("No data found. Generating synthetic data first...")
+        from app.models.generate_data import generate_realistic_data
+        generate_realistic_data()
     
-    pd.DataFrame(sample_data).to_csv("training_data.csv", index=False)
-    print("Created sample training_data.csv")
-    
-    # Train
-    train_fraud_model()
+    # Train BOTH - we'll combine them in the risk engine
+    train_with_synthetic_data()
+    train_anomaly_only()
