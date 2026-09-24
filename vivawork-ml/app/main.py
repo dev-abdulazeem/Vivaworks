@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import recommendations, risk, review, verification, feed
+from app.routers import recommendations, risk, review, verification, feed, intelligence
 
 app = FastAPI(
     title="VivaWork ML Service",
-    description="AI models for job matching, risk assessment, ID verification, and feed ranking",
-    version="1.1.0"
+    description="AI models for job matching, risk assessment, ID verification, feed ranking, and network intelligence",
+    version="1.2.0"
 )
 
 # Allow your Node.js app to call this (adjust port as needed)
@@ -23,7 +23,21 @@ app.include_router(risk.router, prefix="/ml/risk", tags=["risk"])
 app.include_router(review.router, prefix="/ml/review", tags=["human-review"])
 app.include_router(verification.router, prefix="/ml/verify", tags=["verification"])
 app.include_router(feed.router, prefix="/ml/feed", tags=["feed"])
+app.include_router(intelligence.router, prefix="/ml/intel", tags=["intelligence"])
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "vivawork-ml", "version": "1.1.0"}
+    return {
+        "status": "healthy", 
+        "service": "vivawork-ml", 
+        "version": "1.2.0",
+        "features": [
+            "job_recommendations",
+            "risk_assessment", 
+            "human_review",
+            "id_verification",
+            "feed_ranking",
+            "geo_intelligence",
+            "network_security"
+        ]
+    }

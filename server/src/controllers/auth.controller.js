@@ -1,5 +1,5 @@
 const { prisma } = require('../config/database');
-const { generateTokens } = require('../middleware/auth');
+const { generateTokens, verifyRefreshToken } = require('../middleware/auth');
 const {
   hashPassword,
   comparePassword,
@@ -16,6 +16,7 @@ const {
 } = require('../utils/email');
 const { getGoogleAuthURL, getGoogleUser } = require('../utils/googleAuth');
 
+// ─── REGISTER ──────────────────────────────────────────────────────────
 const register = async (req, res) => {
   try {
     const { email, password, firstName, lastName, isFreelancer, isBuyer } = req.body;
@@ -94,10 +95,10 @@ const register = async (req, res) => {
   }
 };
 
+// ─── VERIFY EMAIL ──────────────────────────────────────────────────────
 const verifyEmail = async (req, res) => {
   try {
     const { email, code } = req.body;
-
     const sanitizedEmail = sanitizeInput(email).toLowerCase();
 
     const user = await prisma.user.findUnique({
@@ -186,6 +187,7 @@ const verifyEmail = async (req, res) => {
   }
 };
 
+// ─── RESEND VERIFICATION CODE ──────────────────────────────────────────
 const resendVerificationCode = async (req, res) => {
   try {
     const { email } = req.body;
@@ -239,6 +241,7 @@ const resendVerificationCode = async (req, res) => {
   }
 };
 
+// ─── LOGIN ─────────────────────────────────────────────────────────────
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -339,6 +342,7 @@ const login = async (req, res) => {
   }
 };
 
+// ─── REFRESH TOKEN ─────────────────────────────────────────────────────
 const refreshToken = async (req, res) => {
   try {
     const refreshToken = req.cookies.refreshToken;
@@ -347,7 +351,6 @@ const refreshToken = async (req, res) => {
       return res.status(401).json({ message: 'Refresh token required', code: 'NO_REFRESH_TOKEN' });
     }
 
-    const { verifyRefreshToken } = require('../middleware/auth');
     const decoded = verifyRefreshToken(refreshToken);
 
     const user = await prisma.user.findUnique({
@@ -402,13 +405,14 @@ const refreshToken = async (req, res) => {
   }
 };
 
+// ─── LOGOUT ────────────────────────────────────────────────────────────
 const logout = async (req, res) => {
   try {
     if (req.sessionId) {
       await prisma.session.update({
         where: { id: req.sessionId },
         data: { isActive: false },
-      });
+      }).catch(() => {}); // Ignore if session doesn't exist
     }
 
     res.clearCookie('refreshToken', {
@@ -424,6 +428,7 @@ const logout = async (req, res) => {
   }
 };
 
+// ─── FORGOT PASSWORD ───────────────────────────────────────────────────
 const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -433,6 +438,7 @@ const forgotPassword = async (req, res) => {
       where: { email: sanitizedEmail },
     });
 
+    // Always return 200 to prevent email enumeration
     if (!user) {
       return res.status(200).json({ message: 'If an account exists, a reset link has been sent' });
     }
@@ -449,7 +455,6 @@ const forgotPassword = async (req, res) => {
     });
 
     const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
-
     await sendPasswordResetEmail(user.email, resetLink, user.firstName);
 
     return res.status(200).json({ message: 'If an account exists, a reset link has been sent' });
@@ -459,6 +464,7 @@ const forgotPassword = async (req, res) => {
   }
 };
 
+// ─── RESET PASSWORD ────────────────────────────────────────────────────
 const resetPassword = async (req, res) => {
   try {
     const { token, newPassword } = req.body;
@@ -504,8 +510,15 @@ const resetPassword = async (req, res) => {
   }
 };
 
+// ─── GET ME (PROFILE) ──────────────────────────────────────────────────
 const getMe = async (req, res) => {
   try {
+    // 1. Ensure the auth middleware successfully attached the user
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ message: 'Unauthorized: No user ID in token', code: 'UNAUTHORIZED' });
+    }
+
+    // 2. Fetch the user from the database
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: {
@@ -524,7 +537,7 @@ const getMe = async (req, res) => {
         isFreelancer: true,
         isBuyer: true,
         isAdmin: true,
-        kycVerified: true,
+        kycStatus: true, // ✅ FIXED: Changed from 'kycVerified' to 'kycStatus' to match Prisma schema
         createdAt: true,
         profile: true,
         wallet: {
@@ -537,13 +550,25 @@ const getMe = async (req, res) => {
       },
     });
 
+    // 3. Handle the case where the user doesn't exist (prevents 500 crash)
+    if (!user) {
+      return res.status(404).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
+
+    // 4. Send the successful response
     return res.status(200).json({ user });
   } catch (error) {
-    console.error('Get me error:', error);
-    return res.status(500).json({ message: 'Failed to fetch profile', code: 'PROFILE_ERROR' });
+    // 5. Log the actual error so you can see it in your terminal
+    console.error('❌ Get me error:', error);
+    return res.status(500).json({ 
+      message: 'Failed to fetch profile', 
+      code: 'PROFILE_ERROR',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
+// ─── GOOGLE AUTH ───────────────────────────────────────────────────────
 const googleAuth = async (req, res) => {
   try {
     const authUrl = getGoogleAuthURL();
@@ -573,7 +598,8 @@ const googleCallback = async (req, res) => {
     });
 
     if (!user) {
-      const randomPassword = require('crypto').randomBytes(32).toString('hex');
+      const crypto = require('crypto');
+      const randomPassword = crypto.randomBytes(32).toString('hex');
       const hashedPassword = await hashPassword(randomPassword);
 
       user = await prisma.user.create({
@@ -636,8 +662,7 @@ const googleCallback = async (req, res) => {
   }
 };
 
-
-// ─── GET ACTIVE SESSIONS ───
+// ─── GET ACTIVE SESSIONS ───────────────────────────────────────────────
 const getSessions = async (req, res) => {
   try {
     const sessions = await prisma.session.findMany({
@@ -656,7 +681,6 @@ const getSessions = async (req, res) => {
       },
     });
 
-    // Parse user agent to get device name
     const sessionsWithDevice = sessions.map(s => ({
       ...s,
       deviceName: parseDeviceName(s.userAgent),
@@ -670,7 +694,7 @@ const getSessions = async (req, res) => {
   }
 };
 
-// ─── REVOKE A SESSION ───
+// ─── REVOKE A SESSION ──────────────────────────────────────────────────
 const revokeSession = async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -698,13 +722,13 @@ const revokeSession = async (req, res) => {
   }
 };
 
-// ─── REVOKE ALL OTHER SESSIONS ───
+// ─── REVOKE ALL OTHER SESSIONS ─────────────────────────────────────────
 const revokeAllOtherSessions = async (req, res) => {
   try {
     await prisma.session.updateMany({
       where: {
         userId: req.user.id,
-        id: { not: req.sessionId }, // Keep current session
+        id: { not: req.sessionId },
         isActive: true,
       },
       data: { isActive: false },
@@ -717,7 +741,7 @@ const revokeAllOtherSessions = async (req, res) => {
   }
 };
 
-// ─── CHANGE PASSWORD ───
+// ─── CHANGE PASSWORD ───────────────────────────────────────────────────
 const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -730,6 +754,10 @@ const changePassword = async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
     });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
 
     const isValid = await comparePassword(currentPassword, user.password);
     if (!isValid) {
@@ -762,7 +790,7 @@ const changePassword = async (req, res) => {
   }
 };
 
-// ─── CHANGE EMAIL ───
+// ─── CHANGE EMAIL ──────────────────────────────────────────────────────
 const changeEmail = async (req, res) => {
   try {
     const { newEmail, password } = req.body;
@@ -771,6 +799,10 @@ const changeEmail = async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
     });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
 
     const isValid = await comparePassword(password, user.password);
     if (!isValid) {
@@ -808,7 +840,7 @@ const changeEmail = async (req, res) => {
   }
 };
 
-// ─── DELETE ACCOUNT ───
+// ─── DELETE ACCOUNT ────────────────────────────────────────────────────
 const deleteAccount = async (req, res) => {
   try {
     const { password } = req.body;
@@ -816,6 +848,10 @@ const deleteAccount = async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
     });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
 
     const isValid = await comparePassword(password, user.password);
     if (!isValid) {
@@ -839,7 +875,7 @@ const deleteAccount = async (req, res) => {
   }
 };
 
-// ─── HELPERS: Parse Device Info ───
+// ─── HELPERS: Parse Device Info ────────────────────────────────────────
 function parseDeviceName(userAgent) {
   if (!userAgent) return 'Unknown Device';
   if (userAgent.includes('Mobile')) return 'Mobile Device';
@@ -872,10 +908,10 @@ module.exports = {
   getMe,
   googleAuth,
   googleCallback,
-  getSessions,           
-  revokeSession,         
-  revokeAllOtherSessions, 
-  changePassword,        
-  changeEmail,           
-  deleteAccount,         
+  getSessions,
+  revokeSession,
+  revokeAllOtherSessions,
+  changePassword,
+  changeEmail,
+  deleteAccount,
 };
