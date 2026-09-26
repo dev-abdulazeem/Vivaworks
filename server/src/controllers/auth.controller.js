@@ -16,6 +16,40 @@ const {
 } = require('../utils/email');
 const { getGoogleAuthURL, getGoogleUser } = require('../utils/googleAuth');
 
+// ─── SHARED HELPERS ────────────────────────────────────────────────────
+// (replaces the repeated session/cookie blocks — behavior is identical)
+
+const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+const createSession = (req, userId, accessToken) =>
+  prisma.session.create({
+    data: {
+      userId,
+      token: accessToken,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      expiresAt: new Date(Date.now() + ACCESS_TOKEN_TTL_MS),
+    },
+  });
+
+const setRefreshCookie = (res, refreshToken) => {
+  res.cookie('refreshToken', refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: REFRESH_TOKEN_TTL_MS,
+  });
+};
+
+const clearRefreshCookie = (res) => {
+  res.clearCookie('refreshToken', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+  });
+};
+
 // ─── REGISTER ──────────────────────────────────────────────────────────
 const register = async (req, res) => {
   try {
@@ -150,22 +184,8 @@ const verifyEmail = async (req, res) => {
 
     const tokens = generateTokens(user.id);
 
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        token: tokens.accessToken,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      },
-    });
-
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    await createSession(req, user.id, tokens.accessToken);
+    setRefreshCookie(res, tokens.refreshToken);
 
     return res.status(200).json({
       message: 'Email verified successfully',
@@ -180,6 +200,9 @@ const verifyEmail = async (req, res) => {
         isAdmin: user.isAdmin,
       },
       accessToken: tokens.accessToken,
+      // ✅ Mobile clients (React Native) cannot read httpOnly cookies,
+      // so the refresh token is also returned in the body.
+      refreshToken: tokens.refreshToken,
     });
   } catch (error) {
     console.error('Verify email error:', error);
@@ -255,20 +278,21 @@ const login = async (req, res) => {
       where: { email: sanitizedEmail },
     });
 
-    await prisma.loginAttempt.create({
-      data: {
-        userId: user ? user.id : null,
-        email: sanitizedEmail,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        success: false,
-      },
-    });
-
     if (!user) {
+      await prisma.loginAttempt.create({
+        data: {
+          userId: null,
+          email: sanitizedEmail,
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'],
+          success: false,
+        },
+      });
       return res.status(401).json({ message: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
+    // ✅ FIXED: count failures BEFORE recording this attempt, so a correct
+    // password on the 5th try is no longer wrongly blocked by the lockout.
     const recentFailedAttempts = await prisma.loginAttempt.count({
       where: {
         userId: user.id,
@@ -283,6 +307,17 @@ const login = async (req, res) => {
 
     const isValidPassword = await comparePassword(password, user.password);
 
+    // Record the result AFTER we know the outcome
+    await prisma.loginAttempt.create({
+      data: {
+        userId: user.id,
+        email: sanitizedEmail,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        success: isValidPassword,
+      },
+    });
+
     if (!isValidPassword) {
       return res.status(401).json({ message: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
@@ -291,34 +326,10 @@ const login = async (req, res) => {
       return res.status(403).json({ message: 'Account suspended. Contact support.', code: 'ACCOUNT_SUSPENDED' });
     }
 
-    await prisma.loginAttempt.create({
-      data: {
-        userId: user.id,
-        email: sanitizedEmail,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        success: true,
-      },
-    });
-
     const tokens = generateTokens(user.id);
 
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        token: tokens.accessToken,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      },
-    });
-
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    await createSession(req, user.id, tokens.accessToken);
+    setRefreshCookie(res, tokens.refreshToken);
 
     return res.status(200).json({
       message: 'Login successful',
@@ -335,6 +346,8 @@ const login = async (req, res) => {
         headline: user.headline,
       },
       accessToken: tokens.accessToken,
+      // ✅ Mobile clients cannot read httpOnly cookies -> also send in body
+      refreshToken: tokens.refreshToken,
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -345,13 +358,17 @@ const login = async (req, res) => {
 // ─── REFRESH TOKEN ─────────────────────────────────────────────────────
 const refreshToken = async (req, res) => {
   try {
-    const refreshToken = req.cookies.refreshToken;
+    // ✅ FIXED: accept the refresh token from the JSON body (React Native)
+    // with the httpOnly cookie as a fallback (web browsers).
+    const tokenFromBody = req.body?.refreshToken;
+    const tokenFromCookie = req.cookies?.refreshToken;
+    const presentedToken = tokenFromBody || tokenFromCookie;
 
-    if (!refreshToken) {
+    if (!presentedToken) {
       return res.status(401).json({ message: 'Refresh token required', code: 'NO_REFRESH_TOKEN' });
     }
 
-    const decoded = verifyRefreshToken(refreshToken);
+    const decoded = verifyRefreshToken(presentedToken);
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
@@ -374,26 +391,14 @@ const refreshToken = async (req, res) => {
 
     const tokens = generateTokens(user.id);
 
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        token: tokens.accessToken,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      },
-    });
-
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    await createSession(req, user.id, tokens.accessToken);
+    setRefreshCookie(res, tokens.refreshToken);
 
     return res.status(200).json({
       message: 'Token refreshed',
       accessToken: tokens.accessToken,
+      // ✅ Return the rotated refresh token so mobile can persist it
+      refreshToken: tokens.refreshToken,
       user,
     });
   } catch (error) {
@@ -415,11 +420,7 @@ const logout = async (req, res) => {
       }).catch(() => {}); // Ignore if session doesn't exist
     }
 
-    res.clearCookie('refreshToken', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-    });
+    clearRefreshCookie(res);
 
     return res.status(200).json({ message: 'Logout successful' });
   } catch (error) {
@@ -537,7 +538,7 @@ const getMe = async (req, res) => {
         isFreelancer: true,
         isBuyer: true,
         isAdmin: true,
-        kycStatus: true, // ✅ FIXED: Changed from 'kycVerified' to 'kycStatus' to match Prisma schema
+        kycStatus: true,
         createdAt: true,
         profile: true,
         wallet: {
@@ -625,24 +626,10 @@ const googleCallback = async (req, res) => {
 
     const tokens = generateTokens(user.id);
 
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        token: tokens.accessToken,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      },
-    });
+    await createSession(req, user.id, tokens.accessToken);
+    setRefreshCookie(res, tokens.refreshToken);
 
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    const redirectUrl = `${process.env.CLIENT_URL}/auth/callback?token=${tokens.accessToken}&user=${encodeURIComponent(JSON.stringify({
+    const redirectUrl = `${process.env.CLIENT_URL}/auth/callback?token=${tokens.accessToken}&refreshToken=${tokens.refreshToken}&user=${encodeURIComponent(JSON.stringify({
       id: user.id,
       email: user.email,
       firstName: user.firstName,
@@ -777,11 +764,7 @@ const changePassword = async (req, res) => {
       }),
     ]);
 
-    res.clearCookie('refreshToken', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-    });
+    clearRefreshCookie(res);
 
     return res.status(200).json({ message: 'Password changed. Please login again.' });
   } catch (error) {
@@ -862,11 +845,7 @@ const deleteAccount = async (req, res) => {
       where: { id: req.user.id },
     });
 
-    res.clearCookie('refreshToken', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-    });
+    clearRefreshCookie(res);
 
     return res.status(200).json({ message: 'Account deleted successfully' });
   } catch (error) {
