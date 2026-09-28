@@ -31,6 +31,7 @@ const {
   recordProfileView,
   getProfileViews,
   getProfileStats,
+  getMyRecommendations,    // ADD THIS
 } = require('../controllers/user.controller');
 
 // ============================================
@@ -168,5 +169,12 @@ router.post('/sync-earnings/:userId', syncUserEarnings);
 router.post('/profile/:id/view', recordProfileView);
 router.get('/profile-stats', getProfileStats);
 router.get('/profile-views', getProfileViews);
+
+// ============================================
+// 🎯 ML-POWERED RECOMMENDATIONS - BASIC
+// Get personalized job recommendations based on profile skills
+// ============================================
+router.get('/recommendations', getMyRecommendations);           // GET /users/recommendations?limit=10
+router.get('/profile/:id/recommendations', getUserProfile);     // Already includes recommendations in response
 
 module.exports = router;

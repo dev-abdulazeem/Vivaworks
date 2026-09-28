@@ -10,6 +10,7 @@ const {
   getMyJobs,
   getFeaturedJobs,
   markJobFeatured,
+  getRecommendedJobs,
 } = require('../controllers/job.controller');
 const { authenticate, requireVerified, requireRole } = require('../middleware/auth');
 
@@ -51,6 +52,7 @@ router.get('/', getJobs);
 // Protected POST/PATCH/DELETE routes
 router.post('/', authenticate, requireVerified, requireRole('buyer'), jobValidation, handleValidationErrors, createJob);
 router.patch('/:jobId', authenticate, requireVerified, requireRole('buyer'), updateJob);
+router.get('/jobs/recommended', authenticate, getRecommendedJobs);
 router.delete('/:jobId', authenticate, requireVerified, deleteJob);
 
 // Admin-only: Feature/unfeature jobs

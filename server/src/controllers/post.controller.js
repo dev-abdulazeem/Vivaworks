@@ -1,6 +1,7 @@
 const { prisma } = require('../config/database');
 const { sanitizeInput } = require('../utils/security');
 const axios = require('axios');
+const mlService = require('../services/mlService');
 
 // ─── HELPER: FETCH LINK PREVIEW ───
 const fetchLinkPreview = async (url) => {
@@ -210,7 +211,6 @@ const formatPostResponse = (post, currentUserId) => {
   };
 };
 
-// ─── GET FEED ─── (FIXED VERSION)
 const getFeed = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -219,16 +219,11 @@ const getFeed = async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    // ✅ FIXED: Remove the 30-day filter - show ALL posts
-    // ✅ FIXED: Only return posts that are not deleted
-    const where = {
-      // Removed: createdAt filter that was limiting to 30 days
-      // This allows posts from any time period to show
-    };
+    const where = {};
 
     console.log('Fetching feed - Page:', page, 'Limit:', limit, 'Skip:', skip);
 
-    // ✅ FIXED: Fetch exactly `limit` posts, not `limit * 2`
+    // Fetch more posts than needed for ML ranking
     const posts = await prisma.post.findMany({
       where,
       include: {
@@ -254,46 +249,89 @@ const getFeed = async (req, res) => {
       },
       orderBy: { createdAt: 'desc' },
       skip,
-      take: limit, // ✅ FIXED: Changed from `limit * 2` to `limit`
+      take: limit * 2, // Fetch extra for ML to rank
     });
 
-    console.log('Posts found:', posts.length);
-
-    // Shuffle posts randomly for better engagement
-    const shuffledPosts = [...posts];
-    for (let i = shuffledPosts.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffledPosts[i], shuffledPosts[j]] = [shuffledPosts[j], shuffledPosts[i]];
+    let rankedPosts = posts;
+    
+    // 🎯 ML RANKING: If user is logged in, rank posts by relevance
+    if (userId && posts.length > 0) {
+      try {
+        // Get user profile for ML context
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { skills: true, headline: true, bio: true }
+        });
+        
+        // Get user's recent interactions for collaborative filtering
+        const userLikes = await prisma.postLike.findMany({
+          where: { userId },
+          select: { postId: true },
+          take: 50
+        });
+        
+        // Prepare posts for ML ranking
+        const postsForML = posts.map(p => ({
+          id: p.id,
+          title: p.content?.substring(0, 100) || '',
+          description: p.content || '',
+          skills: p.hashtags || [],
+          posted_date: p.createdAt,
+          engagement_score: (p._count.savesList + p._count.sharesList + p._count.commentsList) / 3,
+          author_verified: p.user.isVerified
+        }));
+        
+        // Get user context
+        const userContext = {
+          id: userId,
+          skills: user?.skills || [],
+          bio: user?.bio || '',
+          categories: [], // Can extract from user's industry/field
+          experienceLevel: 'intermediate', // Can calculate from profile
+          completedJobs: [], // Can fetch from contracts
+          recentInteractions: userLikes.map(l => l.postId)
+        };
+        
+        // Call ML service for ranking
+        const mlRanked = await mlService.getFeed(userContext, postsForML, limit);
+        
+        // Reorder posts based on ML ranking
+        if (mlRanked && mlRanked.length > 0) {
+          const postMap = new Map(posts.map(p => [p.id, p]));
+          rankedPosts = mlRanked
+            .map(ranked => postMap.get(ranked.id))
+            .filter(Boolean)
+            .slice(0, limit);
+        }
+        
+      } catch (mlError) {
+        console.error('ML ranking failed, using chronological:', mlError.message);
+        // Fallback: shuffle randomly (your current behavior)
+        rankedPosts = [...posts].sort(() => Math.random() - 0.5).slice(0, limit);
+      }
+    } else {
+      // Anonymous user: shuffle randomly
+      rankedPosts = [...posts].sort(() => Math.random() - 0.5).slice(0, limit);
     }
 
-    // Check if user liked each post
+    // Check engagement status
     let likedPostIds = new Set();
     let savedPostIds = new Set();
+    let sharedPostIds = new Set();
+    
     if (userId) {
-      const [likes, saves] = await Promise.all([
-        prisma.postLike.findMany({
-          where: { userId },
-          select: { postId: true },
-        }),
-        prisma.save.findMany({
-          where: { userId },
-          select: { postId: true },
-        }),
+      const [likes, saves, shares] = await Promise.all([
+        prisma.postLike.findMany({ where: { userId }, select: { postId: true } }),
+        prisma.save.findMany({ where: { userId }, select: { postId: true } }),
+        prisma.share.findMany({ where: { sharedById: userId }, select: { postId: true } }),
       ]);
       likedPostIds = new Set(likes.map(l => l.postId));
       savedPostIds = new Set(saves.map(s => s.postId));
-    }
-
-    let sharedPostIds = new Set();
-    if (userId) {
-      const shares = await prisma.share.findMany({
-        where: { sharedById: userId },
-        select: { postId: true },
-      });
       sharedPostIds = new Set(shares.map(s => s.postId));
     }
 
-    const postIds = shuffledPosts.map(p => p.id);
+    // Get impressions
+    const postIds = rankedPosts.map(p => p.id);
     const impressions = await prisma.postImpression.groupBy({
       by: ['postId'],
       where: { postId: { in: postIds } },
@@ -301,21 +339,19 @@ const getFeed = async (req, res) => {
     });
     const impressionMap = new Map(impressions.map(i => [i.postId, i._count.postId]));
 
-    const postsWithEngagement = shuffledPosts.map(post => ({
+    const postsWithEngagement = rankedPosts.map(post => ({
       ...post,
       isLiked: likedPostIds.has(post.id),
       isSaved: savedPostIds.has(post.id),
       isShared: sharedPostIds.has(post.id),
       saves: post._count.savesList,
       shares: post._count.sharesList,
-      comments: post._count.commentsList, // ✅ FIXED: Use commentsList instead of comments
+      comments: post._count.commentsList,
       impressions: impressionMap.get(post.id) || 0,
+      ml_ranked: true // Flag to show this was ML-ranked
     }));
 
-    // ✅ FIXED: Use same `where` clause to get accurate total
     const total = await prisma.post.count({ where });
-
-    console.log('Total posts in DB:', total, 'Returning:', postsWithEngagement.length);
 
     return res.status(200).json({
       posts: postsWithEngagement,
@@ -325,13 +361,14 @@ const getFeed = async (req, res) => {
         total,
         pages: Math.max(1, Math.ceil(total / limit)),
       },
+      ml_powered: !!userId // Tell frontend ML was used
     });
   } catch (error) {
     console.error('Get feed error:', error);
     return res.status(500).json({ 
       message: 'Failed to fetch feed', 
       code: 'FEED_ERROR',
-      error: error.message // For debugging
+      error: error.message
     });
   }
 };

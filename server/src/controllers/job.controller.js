@@ -1,5 +1,6 @@
 const { prisma } = require('../config/database');
 const { sanitizeInput } = require('../utils/security');
+const mlService = require('../services/mlService');
 
 // ────────────────────────────────────────────────────────────────
 // CREATE JOB
@@ -30,10 +31,22 @@ const createJob = async (req, res) => {
       },
     });
 
+      // Sync to ML model in background (don't await, non-blocking)
+    mlService.loadJobs([{
+      id: job.id,
+      title: job.title,
+      description: job.description,
+      skills: job.skills || [],
+      budget: job.budget,
+      posted_date: job.createdAt
+    }]).catch(err => console.error('ML sync failed:', err.message));
+    
     return res.status(201).json({
       message: 'Job posted successfully',
       job,
+      ml_indexed: true
     });
+    
   } catch (error) {
     console.error('Create job error:', error);
     return res.status(500).json({ message: 'Failed to post job', code: 'JOB_CREATE_ERROR' });
@@ -95,6 +108,114 @@ const getJobs = async (req, res) => {
   } catch (error) {
     console.error('Get jobs error:', error);
     return res.status(500).json({ message: 'Failed to fetch jobs', code: 'JOBS_FETCH_ERROR' });
+  }
+};
+
+  // ────────────────────────────────────────────────────────────────
+// GET RECOMMENDED JOBS (ML-POWERED)
+// ────────────────────────────────────────────────────────────────
+const getRecommendedJobs = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = Math.min(20, parseInt(req.query.limit) || 10);
+    
+    // Get user profile for ML
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        skills: true,
+        headline: true,
+        bio: true,
+        isFreelancer: true,
+        earningBadge: { select: { tier: true } }
+      }
+    });
+    
+    if (!user?.isFreelancer) {
+      return res.status(400).json({ message: 'Only freelancers get recommendations', code: 'NOT_FREELANCER' });
+    }
+    
+    // Get open jobs
+    const jobs = await prisma.job.findMany({
+      where: { status: 'open' },
+      include: {
+        buyer: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            avatar: true,
+            headline: true,
+          },
+        },
+        proposals: { select: { id: true } },
+      },
+      take: 50, // Get more for ML to rank
+      orderBy: { createdAt: 'desc' },
+    });
+    
+    if (jobs.length === 0) {
+      return res.status(200).json({ jobs: [], message: 'No open jobs available' });
+    }
+    
+    // Prepare jobs for ML
+    const jobsForML = jobs.map(j => ({
+      id: j.id,
+      title: j.title,
+      description: j.description,
+      skills: j.skills || [],
+      budget: j.budget || 0,
+      posted_date: j.createdAt,
+      client_rating: 4.5, // TODO: Calculate from reviews
+      proposal_count: j.proposals.length
+    }));
+    
+    // Get user's completed jobs for context
+    const completedContracts = await prisma.contract.findMany({
+      where: { freelancerId: userId, status: 'completed' },
+      select: { job: { select: { title: true } } },
+      take: 10
+    });
+    
+    const userProfile = {
+      id: userId,
+      skills: user.skills || [],
+      bio: user.bio || '',
+      headline: user.headline || '',
+      categories: [], // Extract from skills/industry
+      experienceLevel: user.earningBadge?.tier === 'legend' ? 'expert' : 
+                       user.earningBadge?.tier === 'top_rated' ? 'intermediate' : 'beginner',
+      completedJobs: completedContracts.map(c => c.job?.title).filter(Boolean)
+    };
+    
+    // Get ML recommendations
+    const recommendations = await mlService.getJobRecommendations(userProfile);
+    
+    // Map back to full job objects
+    const jobMap = new Map(jobs.map(j => [j.id, j]));
+    const recommendedJobs = recommendations
+      .map(rec => ({
+        ...jobMap.get(rec.job_id),
+        match_score: rec.match_score,
+        match_reasons: rec.match_reasons
+      }))
+      .filter(j => j.id) // Remove any not found
+      .slice(0, limit);
+    
+    return res.status(200).json({
+      jobs: recommendedJobs,
+      ml_powered: true,
+      count: recommendedJobs.length
+    });
+    
+  } catch (error) {
+    console.error('Get recommended jobs error:', error);
+    // Fallback to regular jobs if ML fails
+    return res.status(500).json({ 
+      message: 'Failed to get recommendations', 
+      code: 'RECOMMEND_ERROR',
+      fallback: true 
+    });
   }
 };
 
@@ -391,4 +512,5 @@ module.exports = {
   getMyJobs,
   getFeaturedJobs,
   markJobFeatured,
+  getRecommendedJobs,
 };
