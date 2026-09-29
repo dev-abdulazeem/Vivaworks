@@ -14,6 +14,8 @@ import {
   FireIcon,
   UserGroupIcon,
   AdjustmentsHorizontalIcon,
+  StarIcon,
+  RocketLaunchIcon,
 } from '@heroicons/react/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/react/24/solid'
 
@@ -24,6 +26,12 @@ function Jobs() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [savedJobs, setSavedJobs] = useState(new Set())
+
+  // ML recommendations ("For You")
+  const [activeTab, setActiveTab] = useState('all') // 'all' | 'recommended'
+  const [recommendedJobs, setRecommendedJobs] = useState([])
+  const [recLoading, setRecLoading] = useState(false)
+  const [canRecommend, setCanRecommend] = useState(false)
 
   const [page, setPage] = useState(1)
   const [limit] = useState(10)
@@ -83,7 +91,37 @@ function Jobs() {
     fetchJobs()
   }, [fetchJobs])
 
-  const filteredJobs = jobs.filter((job) => {
+  // Fetch ML recommendations (freelancers only). Any failure just means
+  // the user keeps seeing the normal job list.
+  const fetchRecommended = useCallback(async () => {
+    setRecLoading(true)
+    try {
+      const response = await api.get('/users/recommendations?limit=20')
+      const recs = response.data.recommendations || []
+      setRecommendedJobs(recs)
+      setCanRecommend(recs.length > 0)
+      return recs.length > 0
+    } catch (err) {
+      // e.g. 400 NOT_FREELANCER, 401, or ML failure
+      setRecommendedJobs([])
+      setCanRecommend(false)
+      return false
+    } finally {
+      setRecLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchRecommended().then((ok) => {
+      if (ok) setActiveTab('recommended')
+    })
+  }, [fetchRecommended])
+
+  const isRecommendedTab = activeTab === 'recommended' && canRecommend
+  const displayJobs = isRecommendedTab ? recommendedJobs : jobs
+  const busy = isRecommendedTab ? recLoading : isLoading
+
+  const filteredJobs = displayJobs.filter((job) => {
     if (!searchQuery) return true
     const q = searchQuery.toLowerCase()
     return (
@@ -163,6 +201,14 @@ function Jobs() {
     return `${f}${l}`.toUpperCase() || '?'
   }
 
+  const handleRefresh = () => {
+    if (isRecommendedTab) fetchRecommended()
+    else fetchJobs()
+  }
+
+  const headerCount = isRecommendedTab ? recommendedJobs.length : total
+  const resultsTotal = isRecommendedTab ? recommendedJobs.length : total
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
@@ -180,7 +226,11 @@ function Jobs() {
                 Find Your Next Project
               </h1>
               <p className="text-sm text-slate-500 mt-1">
-                {isLoading ? 'Loading opportunities...' : `${total.toLocaleString()} jobs waiting for you`}
+                {busy
+                  ? 'Loading opportunities...'
+                  : isRecommendedTab
+                    ? `${headerCount.toLocaleString()} jobs picked for you`
+                    : `${total.toLocaleString()} jobs waiting for you`}
               </p>
             </div>
 
@@ -193,6 +243,33 @@ function Jobs() {
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-5">
+        {/* Tabs (only shown when the user has ML recommendations) */}
+        {canRecommend && (
+          <div className="flex items-center gap-2 mb-4">
+            <button
+              onClick={() => setActiveTab('recommended')}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border transition-all ${
+                activeTab === 'recommended'
+                  ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm'
+                  : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+              }`}
+            >
+              <StarIcon className="w-4 h-4" />
+              For You
+            </button>
+            <button
+              onClick={() => setActiveTab('all')}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold border transition-all ${
+                activeTab === 'all'
+                  ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm'
+                  : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+              }`}
+            >
+              All Jobs
+            </button>
+          </div>
+        )}
+
         {/* Search Bar */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-5 shadow-sm">
           <div className="flex flex-col sm:flex-row gap-3">
@@ -216,36 +293,38 @@ function Jobs() {
             </div>
 
             <div className="flex gap-2">
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all border ${
-                  showFilters || activeFilterCount > 0
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                    : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
-                }`}
-              >
-                <AdjustmentsHorizontalIcon className="w-4 h-4" />
-                Filters
-                {activeFilterCount > 0 && (
-                  <span className="w-5 h-5 bg-emerald-600 text-white text-xs rounded-full flex items-center justify-center font-bold">
-                    {activeFilterCount}
-                  </span>
-                )}
-              </button>
+              {!isRecommendedTab && (
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all border ${
+                    showFilters || activeFilterCount > 0
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                      : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                  }`}
+                >
+                  <AdjustmentsHorizontalIcon className="w-4 h-4" />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span className="w-5 h-5 bg-emerald-600 text-white text-xs rounded-full flex items-center justify-center font-bold">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </button>
+              )}
 
               <button
-                onClick={fetchJobs}
-                disabled={isLoading}
+                onClick={handleRefresh}
+                disabled={busy}
                 className="flex items-center justify-center w-11 h-11 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 hover:text-emerald-600 hover:border-emerald-200 transition-all disabled:opacity-50"
                 title="Refresh"
               >
-                <ArrowPathIcon className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                <ArrowPathIcon className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
               </button>
             </div>
           </div>
 
           {/* Filters Panel */}
-          {showFilters && (
+          {showFilters && !isRecommendedTab && (
             <div className="mt-4 pt-4 border-t border-slate-100">
               <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 <div>
@@ -321,7 +400,7 @@ function Jobs() {
         </div>
 
         {/* Error */}
-        {error && (
+        {error && !isRecommendedTab && (
           <div className="mb-5 p-4 bg-red-50 border border-red-100 rounded-2xl text-red-600 text-sm flex items-center justify-between">
             <div className="flex items-center gap-2">
               <XMarkIcon className="w-4 h-4" />
@@ -336,16 +415,16 @@ function Jobs() {
         {/* Results Count */}
         <div className="flex items-center justify-between mb-4">
           <p className="text-sm text-slate-500">
-            Showing <span className="font-semibold text-slate-900">{filteredJobs.length}</span> of <span className="font-semibold text-slate-900">{total}</span> jobs
+            Showing <span className="font-semibold text-slate-900">{filteredJobs.length}</span> of <span className="font-semibold text-slate-900">{resultsTotal}</span> jobs
             {searchQuery && <span className="ml-2 text-slate-400">for "{searchQuery}"</span>}
           </p>
           <button className="flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-emerald-600 transition-colors bg-white px-3 py-1.5 rounded-lg border border-slate-200">
-            Newest <ChevronDownIcon className="w-3.5 h-3.5" />
+            {isRecommendedTab ? 'Best match' : 'Newest'} <ChevronDownIcon className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {/* Jobs List */}
-        {isLoading ? (
+        {busy ? (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
               <div key={i} className="bg-white rounded-2xl border border-slate-100 p-5 animate-pulse">
@@ -370,6 +449,7 @@ function Jobs() {
               {filteredJobs.map((job) => {
                 const isSaved = savedJobs.has(job.id)
                 const statusStyle = getStatusStyle(job.status)
+                const hasMatch = typeof job.match_score === 'number'
 
                 return (
                   <div
@@ -387,7 +467,7 @@ function Jobs() {
                               className="w-11 h-11 rounded-xl object-cover"
                             />
                           ) : (
-                            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-400 to-green-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                            <div className="w-11 h-11 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
                               {getInitials(job.buyer?.firstName, job.buyer?.lastName)}
                             </div>
                           )}
@@ -396,6 +476,12 @@ function Jobs() {
                         <div className="flex-1 min-w-0">
                           {/* Tags */}
                           <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+                            {isRecommendedTab && hasMatch && (
+                              <span className="px-2 py-0.5 bg-emerald-600 text-white text-[11px] font-bold rounded-md flex items-center gap-1">
+                                <RocketLaunchIcon className="w-3 h-3" />
+                                {Math.round(job.match_score * 100)}% match
+                              </span>
+                            )}
                             <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[11px] font-bold rounded-md border border-emerald-100 uppercase tracking-wide">
                               {job.budgetType || 'fixed'}
                             </span>
@@ -416,6 +502,13 @@ function Jobs() {
                               {job.title}
                             </h3>
                           </Link>
+
+                          {/* Match reasons (ML) */}
+                          {isRecommendedTab && job.match_reasons?.length > 0 && (
+                            <p className="text-xs text-emerald-700 font-medium mt-1">
+                              {job.match_reasons.join(' • ')}
+                            </p>
+                          )}
 
                           {/* Description */}
                           <p className="text-sm text-slate-500 mt-1.5 line-clamp-2 leading-relaxed">
@@ -477,7 +570,7 @@ function Jobs() {
                                 {job.buyer?.avatar ? (
                                   <img src={job.buyer.avatar} alt="" className="w-7 h-7 rounded-lg object-cover" />
                                 ) : (
-                                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-400 to-green-600 flex items-center justify-center text-white text-[10px] font-bold">
+                                  <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center text-white text-[10px] font-bold">
                                     {getInitials(job.buyer?.firstName, job.buyer?.lastName)}
                                   </div>
                                 )}
@@ -521,7 +614,7 @@ function Jobs() {
               })}
 
               {/* Empty State */}
-              {filteredJobs.length === 0 && !isLoading && (
+              {filteredJobs.length === 0 && !busy && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-12 sm:p-16 text-center">
                   <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <MagnifyingGlassIcon className="w-8 h-8 text-slate-300" />
@@ -545,8 +638,8 @@ function Jobs() {
               )}
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {/* Pagination (All Jobs tab only; recommendations come as one list) */}
+            {!isRecommendedTab && totalPages > 1 && (
               <div className="flex items-center justify-center gap-2 mt-8">
                 <button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}

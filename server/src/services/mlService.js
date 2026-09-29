@@ -51,9 +51,11 @@ class MLService {
     /**
      * Load jobs into ML model (call when new job posted or cache refresh)
      */
-    async loadJobs(jobs) {
+    async loadJobs(jobs, replace = false) {
         try {
-            const response = await mlApi.post('/jobs/load', jobs);
+            const response = await mlApi.post('/jobs/load', jobs, {
+                params: { replace }  // false = merge (single job), true = full sync
+            });
             return response.data;
         } catch (error) {
             console.error('❌ ML Load Jobs Error:', error.message);
@@ -237,24 +239,28 @@ class MLService {
     
     /**
      * Get ranked job feed for user
+     * Pass the posts you want ranked; the ML service returns them ordered
      */
-    async getFeed(userProfile, limit = 20) {
+    async getFeed(userProfile, posts, limit = 20) {
         try {
             const response = await mlApi.post('/feed', {
+                // User context in body
                 user_id: userProfile.id,
                 skills: userProfile.skills || [],
                 profile_bio: userProfile.bio || '',
                 preferred_categories: userProfile.categories || [],
                 experience_level: userProfile.experienceLevel || 'beginner',
-                past_jobs: userProfile.completedJobs || []
+                past_jobs: userProfile.completedJobs || [],
+                // Posts to rank in body (NEW!)
+                posts: posts  // Pass the posts array here
             }, {
-                params: { limit }
+                params: { limit }  // limit stays as query param
             });
             
             return response.data.feed;
         } catch (error) {
             console.error('❌ Feed Error:', error.message);
-            return [];
+            return posts; // Return unranked posts as fallback
         }
     }
 

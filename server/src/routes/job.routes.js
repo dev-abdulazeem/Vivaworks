@@ -43,6 +43,9 @@ const handleValidationErrors = (req, res, next) => {
 // Protected routes (authenticated users only)
 router.get('/my-jobs', authenticate, requireVerified, requireRole('buyer'), getMyJobs);
 
+// ML recommendations (MUST be before '/:jobId') → GET /api/jobs/recommended
+router.get('/recommended', authenticate, getRecommendedJobs);
+
 // Public routes (no authentication required)
 router.get('/featured', getFeaturedJobs); // ← NEW: Featured jobs endpoint
 router.get('/search', getJobs); // Your existing search route
@@ -52,7 +55,6 @@ router.get('/', getJobs);
 // Protected POST/PATCH/DELETE routes
 router.post('/', authenticate, requireVerified, requireRole('buyer'), jobValidation, handleValidationErrors, createJob);
 router.patch('/:jobId', authenticate, requireVerified, requireRole('buyer'), updateJob);
-router.get('/jobs/recommended', authenticate, getRecommendedJobs);
 router.delete('/:jobId', authenticate, requireVerified, deleteJob);
 
 // Admin-only: Feature/unfeature jobs

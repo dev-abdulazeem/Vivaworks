@@ -61,7 +61,9 @@ router.get('/me', async (req, res) => {
       include: {
         profile: true,
         earningBadge: true,
-        verificationRequest: {
+        // FIX: relation is `documentVerification` (same as the controller),
+        // not `verificationRequest`
+        documentVerification: {
           select: { status: true },
         },
       },
@@ -74,8 +76,8 @@ router.get('/me', async (req, res) => {
     const { password, refreshToken, ...safeUser } = user;
     
     // Add verification status
-    safeUser.verificationStatus = user.isVerified ? 'verified' : (user.verificationRequest?.status || 'unverified');
-    delete safeUser.verificationRequest;
+    safeUser.verificationStatus = user.isVerified ? 'verified' : (user.documentVerification?.status || 'unverified');
+    delete safeUser.documentVerification;
 
     return res.status(200).json({ user: safeUser });
   } catch (error) {
@@ -87,9 +89,9 @@ router.get('/me', async (req, res) => {
 // ============================================
 // PROFILE ROUTES - BASIC (any logged-in user)
 // ============================================
-router.get('/profile', getCurrentUserProfile);                    // View own profile
+router.get('/profile', getCurrentUserProfile);                    // View own profile (includes profileCompleteness + recommendedJobs)
 router.get('/profile/:id', getUserProfile);                       // View other's profile
-router.patch('/profile', updateProfile);                          // Edit profile
+router.patch('/profile', updateProfile);                          // Edit profile (returns profile_check)
 router.post('/avatar', uploadPostMedia.single('avatar'), uploadAvatar);
 router.post('/banner', uploadPostMedia.single('banner'), uploadBanner);
 
@@ -146,10 +148,11 @@ router.post('/verification', uploadPostMedia.fields([
   { name: 'selfieImage', maxCount: 1 },
 ]), requestVerification);
 
+// NOTE: '/verification/status' must stay ABOVE '/verification/:userId'
 router.get('/verification/status', getVerificationStatus);
 router.get('/verification/:userId', getUserVerificationStatus);
 
-// Admin review - STANDARD (only verified admins should review)
+// Admin review - STANDARD (verified) + admin check inside the controller
 router.patch('/verification/:requestId', requireVerifiedFor('standard'), reviewVerification);
 
 // ============================================
@@ -159,7 +162,7 @@ router.post('/toggle-freelancer', toggleFreelancerStatus);
 router.post('/toggle-buyer', toggleBuyerStatus);
 
 // ============================================
-// EARNINGS SYNC - BASIC
+// EARNINGS SYNC - BASIC (own account, or admin for anyone)
 // ============================================
 router.post('/sync-earnings/:userId', syncUserEarnings);
 
@@ -172,9 +175,9 @@ router.get('/profile-views', getProfileViews);
 
 // ============================================
 // 🎯 ML-POWERED RECOMMENDATIONS - BASIC
-// Get personalized job recommendations based on profile skills
+// Profile is checked first, then jobs are ranked by the ML service
+// GET /users/recommendations?limit=10
 // ============================================
-router.get('/recommendations', getMyRecommendations);           // GET /users/recommendations?limit=10
-router.get('/profile/:id/recommendations', getUserProfile);     // Already includes recommendations in response
+router.get('/recommendations', getMyRecommendations);
 
 module.exports = router;

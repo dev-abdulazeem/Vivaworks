@@ -1,47 +1,34 @@
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter
 from app.models.feed_ranker import feed_ranker
-from app.schemas import JobRecommendationRequest
 
 router = APIRouter()
 
-@router.post("/feed")
-async def get_feed(request: JobRecommendationRequest, limit: int = 20):
+
+class FeedRequest(BaseModel):
+    user_id: str
+    skills: List[str] = []
+    profile_bio: str = ""
+    preferred_categories: List[str] = []
+    experience_level: str = "beginner"
+    past_jobs: List[Any] = []
+    posts: List[Dict[str, Any]] = []   # posts sent from Node
+
+
+@router.post("")   # full path: /ml/feed
+async def get_feed(request: FeedRequest, limit: int = 20):
     """
-    Get personalized job feed
+    Get personalized feed ranked from the posts sent by Node
     """
-    # In production, fetch jobs from your Node.js database
-    # For now, using mock data
-    mock_jobs = [
-        {
-            "id": "job1",
-            "title": "React Developer",
-            "skills": ["React", "JavaScript"],
-            "budget": 500,
-            "posted_date": "2026-09-18T09:00:00",
-            "client_rating": 4.8,
-            "client_hire_rate": 0.9,
-            "proposal_count": 5
-        },
-        {
-            "id": "job2", 
-            "title": "Python Script",
-            "skills": ["Python", "Automation"],
-            "budget": 200,
-            "posted_date": "2026-09-17T15:00:00",
-            "client_rating": 3.5,
-            "client_hire_rate": 0.6,
-            "proposal_count": 12
-        }
-    ]
-    
     user_context = {
         "skills": request.skills,
         "past_jobs": request.past_jobs,
-        "collaborative_scores": {}  # From your Node.js user behavior tracking
+        "collaborative_scores": {}
     }
-    
-    ranked_feed = feed_ranker.rank_feed(request.user_id, mock_jobs, user_context)
-    
+
+    ranked_feed = feed_ranker.rank_feed(request.user_id, request.posts, user_context)
+
     return {
         "user_id": request.user_id,
         "feed": ranked_feed[:limit],

@@ -207,6 +207,219 @@ const updateLastActive = async (userId) => {
   }
 };
 
+// ─── ML PROFILE HELPERS ────────────────────────────────────────
+
+const asArray = (value) => (Array.isArray(value) ? value : []);
+
+// Jobs scoring below this cosine-similarity score are treated as unrelated to the
+// user's profile and are NOT recommended (e.g. web dev jobs for a content creator).
+// Starting guess: tune it by looking at the match_score values your API returns.
+const MIN_MATCH_SCORE = 0.3;
+
+// Turn a profile item (string or object) into plain text for the ML model
+const itemText = (item) => {
+  if (!item) return '';
+  if (typeof item === 'string') return item;
+  return [item.title, item.role, item.name, item.company, item.category, item.degree, item.school, item.description]
+    .filter(Boolean)
+    .join(' ');
+};
+
+/**
+ * Profile check: scores how complete a profile is (0-100) and lists what's missing.
+ * `ready` = enough info for the ML to give meaningful recommendations.
+ * Expects a user object that includes `profile` (the Profile relation).
+ */
+const calculateProfileCompleteness = (user) => {
+  const profile = user?.profile || {};
+  const skills = asArray(user?.skills);
+
+  const checks = [
+    { field: 'headline', weight: 15, ok: !!user?.headline?.trim(), tip: 'Add a headline that says what you do' },
+    { field: 'bio', weight: 20, ok: (user?.bio || '').trim().length >= 50, tip: 'Write a bio of at least 50 characters' },
+    { field: 'skills', weight: 25, ok: skills.length >= 3, tip: 'Add at least 3 skills' },
+    { field: 'experience', weight: 15, ok: asArray(profile.experience).length > 0, tip: 'Add your work experience' },
+    { field: 'portfolio', weight: 10, ok: asArray(profile.portfolio).length > 0, tip: 'Add a portfolio item' },
+    { field: 'hourlyRate', weight: 5, ok: !!user?.hourlyRate, tip: 'Set your hourly rate' },
+    { field: 'location', weight: 5, ok: !!user?.location?.trim(), tip: 'Add your location' },
+    {
+      field: 'credentials',
+      weight: 5,
+      ok: asArray(profile.certifications).length > 0 || asArray(profile.education).length > 0,
+      tip: 'Add education or certifications',
+    },
+  ];
+
+  const score = checks.reduce((sum, c) => sum + (c.ok ? c.weight : 0), 0);
+  const missing = checks.filter((c) => !c.ok).map((c) => ({ field: c.field, tip: c.tip }));
+
+  const hasSomethingToMatch =
+    skills.length > 0 || (user?.bio || '').trim().length >= 20 || !!user?.headline?.trim();
+
+  return {
+    score,
+    ready: hasSomethingToMatch,
+    missing,
+    message: hasSomethingToMatch
+      ? score >= 80
+        ? 'Your profile is strong.'
+        : 'Complete your profile for better job matches.'
+      : 'Add skills, a headline or a bio so we can recommend jobs for you.',
+  };
+};
+
+/**
+ * Load the user's full profile and build the payload the ML service needs.
+ * Sends the richer profile (headline, experience, portfolio, certifications)
+ * folded into the bio text, plus categories from portfolio.
+ */
+const buildMLProfile = async (userId) => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      skills: true,
+      bio: true,
+      headline: true,
+      location: true,
+      hourlyRate: true,
+      isFreelancer: true,
+      profile: true,
+      earningBadge: { select: { tier: true, totalEarned: true } },
+    },
+  });
+
+  if (!user) return null;
+
+  const completedContracts = await prisma.contract.findMany({
+    where: { freelancerId: userId, status: 'completed' },
+    select: { job: { select: { title: true } } },
+    take: 10,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const profile = user.profile || {};
+  const portfolio = asArray(profile.portfolio);
+
+  const extras = [
+    ...asArray(profile.experience).slice(0, 5),
+    ...portfolio.slice(0, 5),
+    ...asArray(profile.certifications).slice(0, 5),
+    ...asArray(profile.education).slice(0, 3),
+  ]
+    .map(itemText)
+    .filter(Boolean);
+
+  const richBio = [user.bio, user.headline, ...extras].filter(Boolean).join('. ').slice(0, 1500);
+
+  const categories = [...new Set(portfolio.map((p) => p?.category).filter(Boolean))];
+
+  const tier = user.earningBadge?.tier;
+
+  const userForML = {
+    id: userId,
+    skills: user.skills || [],
+    bio: richBio,
+    headline: user.headline || '',
+    categories,
+    experienceLevel: tier === 'legend' ? 'expert' :
+                     tier === 'top_rated' ? 'intermediate' : 'beginner',
+    completedJobs: completedContracts.map((c) => c.job?.title).filter(Boolean),
+  };
+
+  return { user, check: calculateProfileCompleteness(user), userForML };
+};
+
+/**
+ * Shared ML recommendation flow (used by profile load + /users/recommendations).
+ *  - checks the profile first
+ *  - optionally syncs the open-job pool to the ML service (syncPool)
+ *  - returns jobs in ML rank order, only open ones
+ */
+const getRecommendedJobsForUser = async (userId, limit, { syncPool = false } = {}) => {
+  const ctx = await buildMLProfile(userId);
+  if (!ctx) return { notFound: true };
+  if (!ctx.user.isFreelancer) return { notFreelancer: true };
+
+  const tier = ctx.user.earningBadge?.tier || 'newcomer';
+
+  // Profile check: not enough info to match on
+  if (!ctx.check.ready) {
+    return { recommendations: [], ml_powered: false, profile_check: ctx.check, user_tier: tier };
+  }
+
+  const jobInclude = {
+    buyer: {
+      select: { id: true, firstName: true, lastName: true, avatar: true, headline: true },
+    },
+    proposals: { select: { id: true } },
+  };
+
+  let poolJobs = null;
+  if (syncPool) {
+    poolJobs = await prisma.job.findMany({
+      where: { status: 'open' },
+      include: jobInclude,
+      take: 50,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (poolJobs.length === 0) {
+      return { recommendations: [], ml_powered: false, profile_check: ctx.check, user_tier: tier };
+    }
+
+    // Full sync: replace ML pool with currently open jobs
+    await mlService
+      .loadJobs(
+        poolJobs.map((j) => ({
+          id: j.id,
+          title: j.title,
+          description: j.description,
+          skills: j.skills || [],
+          budget: j.budget || 0,
+          posted_date: j.createdAt,
+        })),
+        true
+      )
+      .catch((err) => console.error('ML sync failed:', err.message));
+  }
+
+  const recs = await mlService.getJobRecommendations(ctx.userForML);
+
+  // Only keep jobs that are actually close to the user's profile
+  const relevantRecs = recs.filter((r) => (r.match_score ?? 0) >= MIN_MATCH_SCORE);
+
+  let jobs = poolJobs;
+  if (!jobs) {
+    jobs = await prisma.job.findMany({
+      where: { id: { in: relevantRecs.map((r) => r.job_id) }, status: 'open' },
+      include: jobInclude,
+    });
+  }
+
+  const jobMap = new Map(jobs.map((j) => [j.id, j]));
+
+  // Keep ML rank order; drop anything that's no longer open
+  let recommendations = relevantRecs
+    .map((rec) => {
+      const job = jobMap.get(rec.job_id);
+      if (!job) return null;
+      return { ...job, match_score: rec.match_score, match_reasons: rec.match_reasons };
+    })
+    .filter(Boolean)
+    .slice(0, limit);
+
+  const ml_powered = recommendations.length > 0;
+
+  // ML returned nothing at all (service down / empty pool): fall back to newest open jobs.
+  // If ML answered but nothing was close enough, we return no recommendations on purpose
+  // instead of showing unrelated jobs.
+  if (recs.length === 0 && poolJobs) {
+    recommendations = poolJobs.slice(0, limit);
+  }
+
+  return { recommendations, ml_powered, profile_check: ctx.check, user_tier: tier };
+};
+
 // ─── PROFILE UPDATE ────────────────────────────────────────────
 
 const updateProfile = async (req, res) => {
@@ -255,26 +468,13 @@ const updateProfile = async (req, res) => {
 
     await updateLastActive(userId);
 
-    // Sync to ML for better recommendations (fire and forget)
-    if (skills || headline || bio) {
-      const userForML = {
-        id: userId,
-        skills: skills || updatedUser.skills || [],
-        bio: bio || updatedUser.bio || '',
-        headline: headline || updatedUser.headline || '',
-        categories: [],
-        experienceLevel: 'intermediate',
-      };
-
-      mlService.getJobRecommendations(userForML)
-        .then(recs => console.log(`ML synced for user ${userId}: ${recs.length} recommendations ready`))
-        .catch(err => console.error('ML sync failed:', err.message));
-    }
+    // NOTE: no ML "sync" needed here. The ML service builds the user's profile
+    // text fresh on every recommendation request, so saving is enough.
 
     return res.status(200).json({
       message: 'Profile updated successfully',
       user: { ...updatedUser, profile },
-      ml_synced: !!(skills || headline || bio),
+      profile_check: calculateProfileCompleteness({ ...updatedUser, profile }),
     });
   } catch (error) {
     console.error('Update profile error:', error);
@@ -672,39 +872,12 @@ const getCurrentUserProfile = async (req, res) => {
       }),
     ]);
 
-    // ML-powered job recommendations
+    // ML-powered job recommendations (top 3, in ML rank order)
     let recommendedJobs = [];
     if (user.isFreelancer && user.skills?.length > 0) {
       try {
-        const userForML = {
-          id: userId,
-          skills: user.skills || [],
-          bio: user.bio || '',
-          headline: user.headline || '',
-          categories: [],
-          experienceLevel: earningsData?.tier === 'legend' ? 'expert' :
-                           earningsData?.tier === 'top_rated' ? 'intermediate' : 'beginner',
-          completedJobs: [],
-        };
-
-        const mlRecs = await mlService.getJobRecommendations(userForML);
-
-        if (mlRecs.length > 0) {
-          const topJobIds = mlRecs.slice(0, 3).map(r => r.job_id);
-          const jobs = await prisma.job.findMany({
-            where: { id: { in: topJobIds }, status: 'open' },
-            include: {
-              buyer: { select: { firstName: true, lastName: true, avatar: true } },
-            },
-            take: 3,
-          });
-
-          recommendedJobs = jobs.map(job => ({
-            ...job,
-            match_score: mlRecs.find(r => r.job_id === job.id)?.match_score,
-            match_reasons: mlRecs.find(r => r.job_id === job.id)?.match_reasons,
-          }));
-        }
+        const result = await getRecommendedJobsForUser(userId, 3, { syncPool: false });
+        recommendedJobs = result.recommendations || [];
       } catch (mlError) {
         console.error('Failed to get ML recommendations for profile:', mlError.message);
       }
@@ -715,6 +888,7 @@ const getCurrentUserProfile = async (req, res) => {
         ...user,
         isOnline: isCurrentlyOnline,
         recommendedJobs,
+        profileCompleteness: calculateProfileCompleteness(user),
         lastActive: user.lastActive,
         followersCount,
         followingCount,
@@ -1155,6 +1329,11 @@ const reviewVerification = async (req, res) => {
     const { status, reviewNote } = req.body;
     const adminId = req.user.id;
 
+    // Only admins can approve/reject verifications
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Admin access required', code: 'ADMIN_ONLY' });
+    }
+
     if (!['approved', 'rejected'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status', code: 'INVALID_STATUS' });
     }
@@ -1168,7 +1347,8 @@ const reviewVerification = async (req, res) => {
       return res.status(404).json({ message: 'Verification request not found', code: 'NOT_FOUND' });
     }
 
-    const updated = await prisma.verificationRequest.update({
+    // FIX: was prisma.verificationRequest (a different model than the one we just read)
+    const updated = await prisma.documentVerification.update({
       where: { id: requestId },
       data: {
         status,
@@ -1271,6 +1451,11 @@ const toggleBuyerStatus = async (req, res) => {
 const syncUserEarnings = async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // Users can sync their own earnings; admins can sync anyone's
+    if (req.user.id !== userId && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized', code: 'UNAUTHORIZED' });
+    }
 
     const result = await updateUserEarningsTier(userId);
 
@@ -1446,75 +1631,32 @@ const getProfileViews = async (req, res) => {
 };
 
 // ─── GET MY ML-POWERED JOB RECOMMENDATIONS ─────────────────────
+// Profile is checked first; the open-job pool is synced to ML before ranking.
 
 const getMyRecommendations = async (req, res) => {
   try {
     const userId = req.user.id;
     const limit = Math.min(20, parseInt(req.query.limit) || 10);
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        skills: true,
-        bio: true,
-        headline: true,
-        isFreelancer: true,
-        earningBadge: { select: { tier: true, totalEarned: true } },
-      },
-    });
+    const result = await getRecommendedJobsForUser(userId, limit, { syncPool: true });
 
-    if (!user?.isFreelancer) {
+    if (result.notFound) {
+      return res.status(404).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
+
+    if (result.notFreelancer) {
       return res.status(400).json({
         message: 'Only freelancers get job recommendations',
         code: 'NOT_FREELANCER',
       });
     }
 
-    const completedContracts = await prisma.contract.findMany({
-      where: { freelancerId: userId, status: 'completed' },
-      select: { job: { select: { title: true, skills: true } } },
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const userForML = {
-      id: userId,
-      skills: user.skills || [],
-      bio: user.bio || '',
-      headline: user.headline || '',
-      categories: [],
-      experienceLevel: user.earningBadge?.tier === 'legend' ? 'expert' :
-                       user.earningBadge?.tier === 'top_rated' ? 'intermediate' : 'beginner',
-      completedJobs: completedContracts.map(c => c.job?.title).filter(Boolean),
-    };
-
-    const mlRecommendations = await mlService.getJobRecommendations(userForML);
-
-    const jobIds = mlRecommendations.slice(0, limit).map(r => r.job_id);
-    const jobs = await prisma.job.findMany({
-      where: { id: { in: jobIds }, status: 'open' },
-      include: {
-        buyer: {
-          select: { id: true, firstName: true, lastName: true, avatar: true, headline: true },
-        },
-        proposals: { select: { id: true } },
-      },
-    });
-
-    const recommendedJobs = mlRecommendations
-      .map(rec => {
-        const job = jobs.find(j => j.id === rec.job_id);
-        if (!job) return null;
-        return { ...job, match_score: rec.match_score, match_reasons: rec.match_reasons };
-      })
-      .filter(Boolean)
-      .slice(0, limit);
-
     return res.status(200).json({
-      recommendations: recommendedJobs,
-      count: recommendedJobs.length,
-      ml_powered: true,
-      user_tier: user.earningBadge?.tier || 'newcomer',
+      recommendations: result.recommendations,
+      count: result.recommendations.length,
+      ml_powered: result.ml_powered,
+      user_tier: result.user_tier,
+      profile_check: result.profile_check,
     });
   } catch (error) {
     console.error('Get recommendations error:', error);

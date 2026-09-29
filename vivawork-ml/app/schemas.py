@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional, Dict, Union
 
 
 # ============================================================
@@ -8,11 +8,26 @@ from typing import List, Optional, Dict
 # ============================================================
 
 class Job(BaseModel):
-    id: str
+    # Accept integer or string ids (Node.js/Postgres may send either),
+    # normalize to string so downstream code always sees one type.
+    id: Union[int, str]
     title: str
-    description: str
-    skills: List[str]
-    required_level: List[str]
+    description: Optional[str] = ""
+    skills: List[str] = Field(default_factory=list)
+    required_level: Union[str, List[str]] = Field(default_factory=list)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _id_to_str(cls, v):
+        return str(v)
+
+    @field_validator("required_level", mode="before")
+    @classmethod
+    def _level_to_list(cls, v):
+        # Recommender code expects a list; normalize a lone string
+        if isinstance(v, str):
+            return [v]
+        return v
 
 
 # ============================================================
