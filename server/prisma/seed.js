@@ -10,331 +10,214 @@ const hashPassword = async (password) => {
 
 const seed = async () => {
   try {
-    console.log('Starting VivaWork seed...');
-
-    // Clean slate - delete in correct order to avoid foreign key issues
-    console.log('Cleaning existing data...');
-    await prisma.notification.deleteMany();
-    await prisma.connection.deleteMany();
-    await prisma.postLike.deleteMany();
-    await prisma.comment.deleteMany();
-    await prisma.post.deleteMany();
-    await prisma.proposal.deleteMany();
-    await prisma.job.deleteMany();
-    await prisma.profile.deleteMany();
-    await prisma.wallet.deleteMany();
-    await prisma.earningBadge.deleteMany();
-    await prisma.follower.deleteMany();
-    await prisma.verificationRequest.deleteMany();
-    await prisma.session.deleteMany();
-    await prisma.loginAttempt.deleteMany();
-    await prisma.savedCard.deleteMany();
-    await prisma.walletTopUpOtp.deleteMany();
-    await prisma.withdrawalOtp.deleteMany();
-    await prisma.emailVerification.deleteMany();
-    await prisma.contentViolation.deleteMany();
-    await prisma.message.deleteMany();
-    await prisma.offer.deleteMany();
-    await prisma.review.deleteMany();
-    await prisma.payment.deleteMany();
-    await prisma.delivery.deleteMany();
-    await prisma.contract.deleteMany();
-    await prisma.dispute.deleteMany();
-    await prisma.user.deleteMany();
-
-    console.log('Data cleaned. Creating users...');
+    console.log('🌱 Starting VivaWork seed (Non-destructive mode)...');
+    console.log('⚠️  Existing data will NOT be deleted.\n');
 
     const adminPassword = await hashPassword('Admin@12345');
     const userPassword = await hashPassword('User@12345');
 
-    const admin = await prisma.user.create({
-      data: {
-        email: 'admin@vivawork.com',
-        password: adminPassword,
-        firstName: 'System',
-        lastName: 'Admin',
-        headline: 'Platform Administrator',
-        bio: 'Managing the VivaWork platform and ensuring smooth operations for all users.',
-        isVerified: true,
-        isAdmin: true,
-        isBuyer: true,
-        isFreelancer: true,
-        skills: ['Management', 'Platform Operations', 'System Administration'],
-        location: 'Lagos, Nigeria',
-      },
-    });
-    console.log('Admin created:', admin.id);
+    // Helper: Create user only if email doesn't already exist
+    const createIfNotExists = async (email, data) => {
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing) {
+        console.log(`⏭️  User ${email} already exists, skipping.`);
+        return existing;
+      }
+      const user = await prisma.user.create({ data: { email, ...data } });
+      console.log(`✅ Created user: ${email}`);
+      return user;
+    };
 
-    const buyer = await prisma.user.create({
-      data: {
-        email: 'buyer@example.com',
+    // ─── 1. ORIGINAL 4 USERS ───
+    const admin = await createIfNotExists('admin@vivawork.com', {
+      password: adminPassword,
+      firstName: 'System', lastName: 'Admin',
+      headline: 'Platform Administrator',
+      bio: 'Managing the VivaWork platform and ensuring smooth operations for all users.',
+      isVerified: true, kycStatus: 'VERIFIED', isAdmin: true, isBuyer: true, isFreelancer: true,
+      skills: ['Management', 'Platform Operations', 'System Administration'],
+      location: 'Lagos, Nigeria',
+    });
+
+    const buyer = await createIfNotExists('buyer@example.com', {
+      password: userPassword,
+      firstName: 'John', lastName: 'Doe',
+      headline: 'Tech Startup Founder',
+      bio: 'Looking for talented developers to build amazing products. I run a fast-growing tech startup in Lagos.',
+      isVerified: true, kycStatus: 'VERIFIED', isBuyer: true,
+      skills: ['Product Management', 'Business Strategy', 'Startup Growth'],
+      location: 'Lagos, Nigeria', hourlyRate: 0,
+    });
+
+    const freelancer = await createIfNotExists('freelancer@example.com', {
+      password: userPassword,
+      firstName: 'Jane', lastName: 'Smith',
+      headline: 'Full Stack Developer',
+      bio: 'Passionate about building scalable web applications. 5+ years of experience with React, Node.js, and cloud infrastructure.',
+      isVerified: true, kycStatus: 'VERIFIED', isFreelancer: true,
+      skills: ['React', 'Node.js', 'PostgreSQL', 'TypeScript', 'Tailwind CSS', 'AWS', 'Docker'],
+      location: 'Abuja, Nigeria', hourlyRate: 5000,
+    });
+
+    const designer = await createIfNotExists('designer@example.com', {
+      password: userPassword,
+      firstName: 'Chinedu', lastName: 'Okonkwo',
+      headline: 'UI/UX Designer & Brand Strategist',
+      bio: 'Creating beautiful and functional designs that drive user engagement and business growth.',
+      isVerified: true, kycStatus: 'VERIFIED', isFreelancer: true,
+      skills: ['Figma', 'Adobe XD', 'UI Design', 'UX Research', 'Branding', 'Prototyping'],
+      location: 'Port Harcourt, Nigeria', hourlyRate: 3500,
+    });
+
+    // ─── 2. 15 NEW USERS (5 Buyers, 10 Freelancers) ───
+    console.log('\n👥 Creating 15 additional users...');
+    const additionalUsersData = [
+      // 5 Buyers (Balance >= 500k)
+      { email: 'user1@example.com', firstName: 'Alice', lastName: 'Johnson', isBuyer: true, isFreelancer: false, headline: 'Product Manager', bio: 'Building the next generation of SaaS products.', skills: ['Product Management', 'Agile', 'Scrum', 'Business Strategy'], location: 'Lagos, Nigeria', walletBalance: 750000 },
+      { email: 'user2@example.com', firstName: 'Bob', lastName: 'Williams', isBuyer: true, isFreelancer: false, headline: 'Marketing Director', bio: 'Scaling brands through data-driven marketing strategies.', skills: ['Digital Marketing', 'SEO', 'Content Strategy', 'Growth Hacking'], location: 'Abuja, Nigeria', walletBalance: 600000 },
+      { email: 'user3@example.com', firstName: 'Charlie', lastName: 'Brown', isBuyer: true, isFreelancer: false, headline: 'E-commerce Founder', bio: 'Running a fast-growing online retail business.', skills: ['E-commerce', 'Supply Chain', 'Retail', 'Shopify'], location: 'Port Harcourt, Nigeria', walletBalance: 850000 },
+      { email: 'user4@example.com', firstName: 'Diana', lastName: 'Prince', isBuyer: true, isFreelancer: false, headline: 'Fintech CEO', bio: 'Disrupting the financial services industry in Africa.', skills: ['Finance', 'Fintech', 'Accounting', 'Business Development'], location: 'Lagos, Nigeria', walletBalance: 1200000 },
+      { email: 'user5@example.com', firstName: 'Evan', lastName: 'Peters', isBuyer: true, isFreelancer: false, headline: 'HealthTech Innovator', bio: 'Developing software solutions for modern healthcare.', skills: ['Healthcare', 'HealthTech', 'Project Management', 'Compliance'], location: 'Ibadan, Nigeria', walletBalance: 550000 },
+      
+      // 10 Freelancers (Various diverse skills)
+      { email: 'user6@example.com', firstName: 'Fiona', lastName: 'Gallagher', isBuyer: false, isFreelancer: true, headline: 'Full Stack Developer', bio: 'Expert in building scalable web applications.', skills: ['React', 'Node.js', 'PostgreSQL', 'TypeScript', 'Tailwind CSS'], location: 'Lagos, Nigeria', hourlyRate: 8000, walletBalance: 50000 },
+      { email: 'user7@example.com', firstName: 'George', lastName: 'Martin', isBuyer: false, isFreelancer: true, headline: 'Python & AI Engineer', bio: 'Building intelligent systems and data pipelines.', skills: ['Python', 'Django', 'Machine Learning', 'Data Science', 'TensorFlow'], location: 'Abuja, Nigeria', hourlyRate: 10000, walletBalance: 75000 },
+      { email: 'user8@example.com', firstName: 'Hannah', lastName: 'Abbott', isBuyer: false, isFreelancer: true, headline: 'Mobile App Developer', bio: 'Creating seamless cross-platform mobile experiences.', skills: ['Flutter', 'Dart', 'React Native', 'Firebase', 'iOS'], location: 'Enugu, Nigeria', hourlyRate: 7000, walletBalance: 40000 },
+      { email: 'user9@example.com', firstName: 'Ian', lastName: 'Malcolm', isBuyer: false, isFreelancer: true, headline: 'Senior UI/UX Designer', bio: 'Crafting intuitive and beautiful user interfaces.', skills: ['UI/UX Design', 'Figma', 'Adobe XD', 'Prototyping', 'User Research'], location: 'Lagos, Nigeria', hourlyRate: 6000, walletBalance: 60000 },
+      { email: 'user10@example.com', firstName: 'Julia', lastName: 'Roberts', isBuyer: false, isFreelancer: true, headline: 'Brand & Graphic Designer', bio: 'Visual storyteller helping brands stand out.', skills: ['Graphic Design', 'Adobe Illustrator', 'Photoshop', 'Branding', 'Typography'], location: 'Kano, Nigeria', hourlyRate: 5000, walletBalance: 30000 },
+      { email: 'user11@example.com', firstName: 'Kevin', lastName: 'Hart', isBuyer: false, isFreelancer: true, headline: 'SEO Content Writer', bio: 'Writing compelling copy that ranks and converts.', skills: ['Content Writing', 'Copywriting', 'SEO', 'Blogging', 'Technical Writing'], location: 'Lagos, Nigeria', hourlyRate: 4000, walletBalance: 25000 },
+      { email: 'user12@example.com', firstName: 'Laura', lastName: 'Croft', isBuyer: false, isFreelancer: true, headline: 'Video Editor & Motion Designer', bio: 'Bringing stories to life through dynamic video editing.', skills: ['Video Editing', 'Premiere Pro', 'After Effects', 'Motion Graphics', 'DaVinci Resolve'], location: 'Abuja, Nigeria', hourlyRate: 6500, walletBalance: 45000 },
+      { email: 'user13@example.com', firstName: 'Mike', lastName: 'Ross', isBuyer: false, isFreelancer: true, headline: 'DevOps Engineer', bio: 'Automating infrastructure and ensuring high availability.', skills: ['DevOps', 'AWS', 'Docker', 'Kubernetes', 'CI/CD', 'Terraform'], location: 'Lagos, Nigeria', hourlyRate: 12000, walletBalance: 90000 },
+      { email: 'user14@example.com', firstName: 'Nancy', lastName: 'Wheeler', isBuyer: false, isFreelancer: true, headline: 'Web3 & Blockchain Developer', bio: 'Building decentralized applications and smart contracts.', skills: ['Blockchain', 'Solidity', 'Web3.js', 'Ethereum', 'Smart Contracts'], location: 'Remote', hourlyRate: 15000, walletBalance: 120000 },
+      { email: 'user15@example.com', firstName: 'Oscar', lastName: 'Martinez', isBuyer: false, isFreelancer: true, headline: 'Cybersecurity Specialist', bio: 'Protecting digital assets and securing networks.', skills: ['Cybersecurity', 'Penetration Testing', 'Network Security', 'Ethical Hacking', 'Compliance'], location: 'Lagos, Nigeria', hourlyRate: 11000, walletBalance: 80000 }
+    ];
+
+    const createdUsers = [];
+    for (const u of additionalUsersData) {
+      const user = await createIfNotExists(u.email, {
         password: userPassword,
-        firstName: 'John',
-        lastName: 'Doe',
-        headline: 'Tech Startup Founder',
-        bio: 'Looking for talented developers to build amazing products. I run a fast-growing tech startup in Lagos.',
-        isVerified: true,
-        isBuyer: true,
-        skills: ['Product Management', 'Business Strategy', 'Startup Growth'],
-        location: 'Lagos, Nigeria',
-        hourlyRate: 0,
-      },
-    });
-    console.log('Buyer created:', buyer.id);
+        firstName: u.firstName, lastName: u.lastName,
+        headline: u.headline, bio: u.bio,
+        isVerified: true, kycStatus: 'VERIFIED',
+        isBuyer: u.isBuyer, isFreelancer: u.isFreelancer,
+        skills: u.skills, location: u.location,
+        hourlyRate: u.hourlyRate || 0,
+      });
+      createdUsers.push({ ...user, walletBalance: u.walletBalance, originalData: u });
+    }
 
-    const freelancer = await prisma.user.create({
-      data: {
-        email: 'freelancer@example.com',
-        password: userPassword,
-        firstName: 'Jane',
-        lastName: 'Smith',
-        headline: 'Full Stack Developer',
-        bio: 'Passionate about building scalable web applications. 5+ years of experience with React, Node.js, and cloud infrastructure.',
-        isVerified: true,
-        isFreelancer: true,
-        skills: ['React', 'Node.js', 'PostgreSQL', 'TypeScript', 'Tailwind CSS', 'AWS', 'Docker'],
-        location: 'Abuja, Nigeria',
-        hourlyRate: 5000,
-      },
-    });
-    console.log('Freelancer created:', freelancer.id);
+    // ─── 3. WALLETS (Only create if missing) ───
+    console.log('\n💰 Ensuring wallets exist...');
+    const walletMap = {
+      [admin.id]: 0,
+      [buyer.id]: 500000,
+      [freelancer.id]: 25000,
+      [designer.id]: 15000,
+    };
+    createdUsers.forEach(u => { walletMap[u.id] = u.walletBalance; });
 
-    const designer = await prisma.user.create({
-      data: {
-        email: 'designer@example.com',
-        password: userPassword,
-        firstName: 'Chinedu',
-        lastName: 'Okonkwo',
-        headline: 'UI/UX Designer & Brand Strategist',
-        bio: 'Creating beautiful and functional designs that drive user engagement and business growth.',
-        isVerified: true,
-        isFreelancer: true,
-        skills: ['Figma', 'Adobe XD', 'UI Design', 'UX Research', 'Branding', 'Prototyping'],
-        location: 'Port Harcourt, Nigeria',
-        hourlyRate: 3500,
-      },
-    });
-    console.log('Designer created:', designer.id);
+    for (const [userId, balance] of Object.entries(walletMap)) {
+      const existingWallet = await prisma.wallet.findUnique({ where: { userId } });
+      if (!existingWallet) {
+        await prisma.wallet.create({ data: { userId, balance, currency: 'NGN' } });
+        console.log(`✅ Created wallet for user ${userId} with balance ${balance}`);
+      } else {
+        console.log(`⏭️  Wallet for user ${userId} already exists, skipping.`);
+      }
+    }
 
-    console.log('Creating wallets...');
-    await prisma.wallet.createMany({
-      data: [
-        { userId: admin.id, balance: 0, currency: 'NGN' },
-        { userId: buyer.id, balance: 100000, currency: 'NGN' },
-        { userId: freelancer.id, balance: 25000, currency: 'NGN' },
-        { userId: designer.id, balance: 15000, currency: 'NGN' },
-      ],
-    });
-    console.log('Wallets created.');
-
-    console.log('Creating profiles...');
-    await prisma.profile.createMany({
-      data: [
-        {
-          userId: freelancer.id,
-          experience: [
-            { title: 'Senior Developer', company: 'TechCorp Nigeria', duration: '2022 - Present' },
-            { title: 'Full Stack Developer', company: 'StartupHub', duration: '2020 - 2022' },
-          ],
-          education: [
-            { degree: 'B.Sc Computer Science', school: 'University of Lagos', year: '2019' },
-          ],
-          certifications: [
-            { name: 'AWS Certified Developer', issuer: 'Amazon Web Services', year: '2023' },
-          ],
-          portfolio: [
-            { title: 'E-commerce Platform', url: 'https://example.com/project1' },
-            { title: 'Fintech Dashboard', url: 'https://example.com/project2' },
-          ],
-          languages: ['English', 'Igbo'],
-          availability: 'Full-time',
-          phone: '+2348012345678',
-          website: 'https://janesmith.dev',
-          linkedin: 'https://linkedin.com/in/janesmith',
-          github: 'https://github.com/janesmith',
-        },
-        {
-          userId: designer.id,
-          experience: [
-            { title: 'Lead Designer', company: 'Creative Agency', duration: '2021 - Present' },
-          ],
-          education: [
-            { degree: 'B.A Graphic Design', school: 'University of Nigeria', year: '2020' },
-          ],
-          certifications: [],
-          portfolio: [
-            { title: 'Banking App Redesign', url: 'https://example.com/design1' },
-          ],
-          languages: ['English', 'Igbo', 'Yoruba'],
-          availability: 'Part-time',
-          phone: '+2348098765432',
-          linkedin: 'https://linkedin.com/in/chineduokonkwo',
-        },
-      ],
-    });
-    console.log('Profiles created.');
-
-    console.log('Creating jobs...');
-    const job1 = await prisma.job.create({
-      data: {
-        buyerId: buyer.id,
-        title: 'Build a Full Stack Freelancing Platform',
-        description: 'We need a talented developer to build a platform similar to Upwork with social features like LinkedIn. The platform should include user profiles, job posting, proposals, contracts, payments, and a social feed. Must be built with React, Node.js, and PostgreSQL.',
-        skills: ['React', 'Node.js', 'PostgreSQL', 'Prisma', 'Paystack'],
-        budget: 500000,
-        budgetType: 'fixed',
-        location: 'Remote',
-      },
-    });
-    console.log('Job 1 created:', job1.id);
-
-    const job2 = await prisma.job.create({
-      data: {
-        buyerId: buyer.id,
-        title: 'Design a Mobile Banking App UI',
-        description: 'Looking for an experienced UI/UX designer to create a modern, user-friendly mobile banking application. Need wireframes, high-fidelity mockups, and a clickable prototype.',
-        skills: ['Figma', 'UI Design', 'UX Research', 'Mobile Design'],
-        budget: 150000,
-        budgetType: 'fixed',
-        location: 'Remote',
-      },
-    });
-    console.log('Job 2 created:', job2.id);
-
-    console.log('Creating proposals...');
-    await prisma.proposal.create({
-      data: {
-        jobId: job1.id,
-        freelancerId: freelancer.id,
-        coverLetter: 'I have extensive experience building full stack applications with React and Node.js. I have worked on similar marketplace platforms and can deliver this project with high quality. My portfolio includes a fintech dashboard and e-commerce platform that demonstrate my capabilities.',
-        proposedRate: 450000,
-        duration: '4 weeks',
-      },
-    });
-
-    await prisma.proposal.create({
-      data: {
-        jobId: job2.id,
-        freelancerId: designer.id,
-        coverLetter: 'I specialize in fintech UI/UX design and have worked on 3 banking apps in the past. I can deliver wireframes within 3 days and full prototypes within 2 weeks.',
-        proposedRate: 120000,
-        duration: '2 weeks',
-      },
-    });
-    console.log('Proposals created.');
-
-    console.log('Creating posts...');
-    await prisma.post.create({
-      data: {
+    // ─── 4. PROFILES (Only for original freelancers if missing) ───
+    console.log('\n📄 Ensuring profiles exist...');
+    const profileData = [
+      {
         userId: freelancer.id,
-        content: 'Excited to announce that I am now available for new projects! Specializing in React, Node.js, and PostgreSQL. Let us build something amazing together. #freelance #webdev #hiring',
-        media: [],
-        likes: 12,
-        comments: 3,
-        shares: 1,
+        experience: [{ title: 'Senior Developer', company: 'TechCorp Nigeria', duration: '2022 - Present' }],
+        education: [{ degree: 'B.Sc Computer Science', school: 'University of Lagos', year: '2019' }],
+        certifications: [{ name: 'AWS Certified Developer', issuer: 'Amazon Web Services', year: '2023' }],
+        portfolio: [{ title: 'E-commerce Platform', url: 'https://example.com/project1' }],
+        languages: ['English', 'Igbo'], availability: 'Full-time',
       },
-    });
-
-    await prisma.post.create({
-      data: {
+      {
         userId: designer.id,
-        content: 'Just completed a major banking app redesign project! The client loved the final result. Nothing beats the feeling of delivering work that exceeds expectations. #design #uiux #freelance',
-        media: [],
-        likes: 24,
-        comments: 7,
-        shares: 3,
-      },
-    });
+        experience: [{ title: 'Lead Designer', company: 'Creative Agency', duration: '2021 - Present' }],
+        education: [{ degree: 'B.A Graphic Design', school: 'University of Nigeria', year: '2020' }],
+        portfolio: [{ title: 'Banking App Redesign', url: 'https://example.com/design1' }],
+        languages: ['English', 'Igbo', 'Yoruba'], availability: 'Part-time',
+      }
+    ];
 
-    await prisma.post.create({
-      data: {
-        userId: buyer.id,
-        content: 'Looking for talented developers and designers for upcoming projects. If you are passionate about building great products, send me a connection request! #hiring #startup #tech',
-        media: [],
-        likes: 8,
-        comments: 5,
-        shares: 2,
-      },
-    });
-    console.log('Posts created.');
+    for (const p of profileData) {
+      const existingProfile = await prisma.profile.findUnique({ where: { userId: p.userId } });
+      if (!existingProfile) {
+        await prisma.profile.create({ data: p });
+        console.log(`✅ Created profile for user ${p.userId}`);
+      } else {
+        console.log(`⏭️  Profile for user ${p.userId} already exists, skipping.`);
+      }
+    }
 
-    console.log('Creating connections...');
-    await prisma.connection.create({
-      data: {
-        senderId: freelancer.id,
-        receiverId: buyer.id,
-        status: 'accepted',
-      },
-    });
-
-    await prisma.connection.create({
-      data: {
-        senderId: designer.id,
-        receiverId: buyer.id,
-        status: 'accepted',
-      },
-    });
-
-    await prisma.connection.create({
-      data: {
-        senderId: freelancer.id,
-        receiverId: designer.id,
-        status: 'accepted',
-      },
-    });
-    console.log('Connections created.');
-
-    console.log('Creating notifications...');
-    await prisma.notification.createMany({
-      data: [
-        {
-          userId: buyer.id,
-          type: 'new_proposal',
-          title: 'New Proposal Received',
-          message: 'Jane Smith submitted a proposal for "Build a Full Stack Freelancing Platform"',
-          link: `/jobs/${job1.id}`,
-          isRead: false,
+    // ─── 5. JOBS (Only if buyer has no jobs yet) ───
+    console.log('\n💼 Ensuring jobs exist...');
+    const existingBuyerJobs = await prisma.job.count({ where: { buyerId: buyer.id } });
+    if (existingBuyerJobs === 0) {
+      await prisma.job.create({
+        data: {
+          buyerId: buyer.id,
+          title: 'Build a Full Stack Freelancing Platform',
+          description: 'We need a talented developer to build a platform similar to Upwork with social features like LinkedIn.',
+          skills: ['React', 'Node.js', 'PostgreSQL', 'Prisma', 'Paystack'],
+          budget: 500000, budgetType: 'fixed', location: 'Remote',
         },
-        {
-          userId: buyer.id,
-          type: 'new_proposal',
-          title: 'New Proposal Received',
-          message: 'Chinedu Okonkwo submitted a proposal for "Design a Mobile Banking App UI"',
-          link: `/jobs/${job2.id}`,
-          isRead: false,
+      });
+      await prisma.job.create({
+        data: {
+          buyerId: buyer.id,
+          title: 'Design a Mobile Banking App UI',
+          description: 'Looking for an experienced UI/UX designer to create a modern, user-friendly mobile banking application.',
+          skills: ['Figma', 'UI Design', 'UX Research', 'Mobile Design'],
+          budget: 150000, budgetType: 'fixed', location: 'Remote',
         },
-        {
-          userId: freelancer.id,
-          type: 'connection_accepted',
-          title: 'Connection Accepted',
-          message: 'John Doe accepted your connection request',
-          link: `/profile/${buyer.id}`,
-          isRead: true,
-        },
-      ],
-    });
-    console.log('Notifications created.');
+      });
+      console.log('✅ Created 2 jobs for buyer.');
+    } else {
+      console.log(`⏭️  Buyer already has ${existingBuyerJobs} jobs, skipping.`);
+    }
 
-    console.log('');
-    console.log('VivaWork seed completed successfully!');
-    console.log('');
-    console.log('--- SEED ACCOUNTS ---');
-    console.log('Admin:      admin@vivawork.com     | Password: Admin@12345');
-    console.log('Buyer:      buyer@example.com      | Password: User@12345');
-    console.log('Freelancer: freelancer@example.com | Password: User@12345');
-    console.log('Designer:   designer@example.com    | Password: User@12345');
-    console.log('');
-    console.log('--- SEED DATA ---');
-    console.log('Users: 4');
-    console.log('Jobs: 2');
-    console.log('Proposals: 2');
-    console.log('Posts: 3');
-    console.log('Connections: 3');
-    console.log('Notifications: 3');
-    console.log('');
+    // ─── 6. POSTS (2 posts per new user, only if they have none) ───
+    console.log('\n📝 Ensuring posts exist for new users...');
+    for (const u of createdUsers) {
+      const existingPostCount = await prisma.post.count({ where: { userId: u.id } });
+      if (existingPostCount === 0) {
+        const skill1 = u.originalData.skills[0];
+        const skill2 = u.originalData.skills[1] || skill1;
+        const role = u.originalData.isBuyer ? 'hiring' : 'freelance';
+
+        await prisma.post.createMany({
+          data: [
+            {
+              userId: u.id,
+              content: `Excited to share my expertise in ${skill1} and ${skill2}. Always looking for new challenges and opportunities to grow! #${skill1.replace(/\s+/g, '')} #${skill2.replace(/\s+/g, '')} #VivaWork #${role}`,
+              media: [], likes: Math.floor(Math.random() * 20), comments: Math.floor(Math.random() * 5), shares: Math.floor(Math.random() * 3),
+            },
+            {
+              userId: u.id,
+              content: `Just wrapped up an amazing project involving ${skill1}. The results were beyond expectations. Open to new collaborations! #${role} #${skill1.replace(/\s+/g, '')} #success`,
+              media: [], likes: Math.floor(Math.random() * 30), comments: Math.floor(Math.random() * 8), shares: Math.floor(Math.random() * 5),
+            }
+          ]
+        });
+        console.log(`✅ Created 2 posts for ${u.email}`);
+      } else {
+        console.log(`⏭️  ${u.email} already has posts, skipping.`);
+      }
+    }
+
+    console.log('\n🎉 VivaWork seed completed successfully!');
+    console.log('🔐 All passwords: User@12345 (Admin: Admin@12345)');
+    console.log('📧 New users: user1@example.com to user15@example.com\n');
 
   } catch (error) {
-    console.error('Seed error:', error.message);
+    console.error('❌ Seed error:', error.message);
     console.error(error.stack);
     process.exit(1);
   } finally {

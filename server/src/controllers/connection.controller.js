@@ -47,7 +47,7 @@ const sendConnectionRequest = async (req, res) => {
       },
       include: {
         receiver: {
-          select: { id: true, firstName: true, lastName: true, avatar: true },
+          select: { id: true, firstName: true, lastName: true, avatar: true, headline: true },
         },
       },
     });
@@ -78,6 +78,11 @@ const acceptConnection = async (req, res) => {
 
     const connection = await prisma.connection.findUnique({
       where: { id: connectionId },
+      include: {
+        sender: {
+          select: { id: true, firstName: true, lastName: true, avatar: true, headline: true },
+        },
+      },
     });
 
     if (!connection) {
@@ -95,11 +100,6 @@ const acceptConnection = async (req, res) => {
     const updatedConnection = await prisma.connection.update({
       where: { id: connectionId },
       data: { status: 'accepted' },
-      include: {
-        sender: {
-          select: { id: true, firstName: true, lastName: true, avatar: true },
-        },
-      },
     });
 
     await prisma.notification.create({
@@ -114,7 +114,10 @@ const acceptConnection = async (req, res) => {
 
     return res.status(200).json({
       message: 'Connection accepted',
-      connection: updatedConnection,
+      connection: {
+        ...updatedConnection,
+        sender: connection.sender,
+      },
     });
   } catch (error) {
     console.error('Accept connection error:', error);
@@ -152,15 +155,16 @@ const rejectConnection = async (req, res) => {
 const getMyConnections = async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
-
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    // Filter out admins at the database level for accurate pagination
     const [connections, total] = await Promise.all([
       prisma.connection.findMany({
         where: {
+          status: 'accepted',
           OR: [
-            { senderId: req.user.id, status: 'accepted' },
-            { receiverId: req.user.id, status: 'accepted' },
+            { senderId: req.user.id, receiver: { isAdmin: false } },
+            { receiverId: req.user.id, sender: { isAdmin: false } },
           ],
         },
         include: {
@@ -172,7 +176,6 @@ const getMyConnections = async (req, res) => {
               avatar: true,
               headline: true,
               isOnline: true,
-              isAdmin: true,
             },
           },
           receiver: {
@@ -183,7 +186,6 @@ const getMyConnections = async (req, res) => {
               avatar: true,
               headline: true,
               isOnline: true,
-              isAdmin: true,
             },
           },
         },
@@ -193,9 +195,10 @@ const getMyConnections = async (req, res) => {
       }),
       prisma.connection.count({
         where: {
+          status: 'accepted',
           OR: [
-            { senderId: req.user.id, status: 'accepted' },
-            { receiverId: req.user.id, status: 'accepted' },
+            { senderId: req.user.id, receiver: { isAdmin: false } },
+            { receiverId: req.user.id, sender: { isAdmin: false } },
           ],
         },
       }),
@@ -209,15 +212,15 @@ const getMyConnections = async (req, res) => {
         user: otherUser,
         connectedAt: c.updatedAt,
       };
-    }).filter(c => c.user.isAdmin !== true);
+    });
 
     return res.status(200).json({
       connections: formattedConnections,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
-        total: formattedConnections.length,
-        pages: Math.ceil(formattedConnections.length / parseInt(limit)),
+        total,
+        pages: Math.ceil(total / parseInt(limit)),
       },
     });
   } catch (error) {
@@ -232,6 +235,9 @@ const getPendingRequests = async (req, res) => {
       where: {
         receiverId: req.user.id,
         status: 'pending',
+        sender: {
+          isAdmin: false, // Filter out admins at DB level
+        },
       },
       include: {
         sender: {
@@ -241,16 +247,13 @@ const getPendingRequests = async (req, res) => {
             lastName: true,
             avatar: true,
             headline: true,
-            isAdmin: true,
           },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    const filteredRequests = requests.filter(r => r.sender.isAdmin !== true);
-
-    return res.status(200).json({ requests: filteredRequests });
+    return res.status(200).json({ requests });
   } catch (error) {
     console.error('Get pending requests error:', error);
     return res.status(500).json({ message: 'Failed to fetch requests', code: 'FETCH_ERROR' });
@@ -286,12 +289,17 @@ const removeConnection = async (req, res) => {
 
 const getConnectionSuggestions = async (req, res) => {
   try {
+    // 1. Get IDs of users already connected to or pending with the current user
     const myConnections = await prisma.connection.findMany({
       where: {
         OR: [
-          { senderId: req.user.id, status: 'accepted' },
-          { receiverId: req.user.id, status: 'accepted' },
+          { senderId: req.user.id },
+          { receiverId: req.user.id },
         ],
+      },
+      select: {
+        senderId: true,
+        receiverId: true,
       },
     });
 
@@ -300,12 +308,14 @@ const getConnectionSuggestions = async (req, res) => {
     );
     connectedIds.push(req.user.id);
 
-    const suggestions = await prisma.user.findMany({
+    // 2. Fetch a LARGER pool of users to ensure variety (not just the absolute newest)
+    // We explicitly exclude admins (isAdmin: false) and suspended users.
+    // We removed 'isVerified: true' so it shows ALL regular users as requested.
+    const pool = await prisma.user.findMany({
       where: {
         id: { notIn: connectedIds },
-        isVerified: true,
         isSuspended: false,
-        isAdmin: false,
+        isAdmin: false, 
       },
       select: {
         id: true,
@@ -315,10 +325,17 @@ const getConnectionSuggestions = async (req, res) => {
         headline: true,
         skills: true,
         location: true,
+        isVerified: true,
       },
-      take: 10,
-      orderBy: { createdAt: 'desc' },
+      take: 50, // Fetch 50 users to get a good mix of old and new accounts
     });
+
+    // 3. Shuffle the pool in JavaScript to give a random, diverse mix of users
+    // This prevents the UI from always showing the exact same "newest" 10 users.
+    const shuffled = pool.sort(() => 0.5 - Math.random());
+    
+    // 4. Return a smaller, diverse slice (e.g., 15 suggestions)
+    const suggestions = shuffled.slice(0, 15);
 
     return res.status(200).json({ suggestions });
   } catch (error) {

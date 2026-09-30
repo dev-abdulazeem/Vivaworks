@@ -57,8 +57,9 @@ function App() {
           <Route path="settings" element={<Settings />} />
           <Route path="profile/:userId?" element={<Profile />} />
           
-          {/* Jobs - specific routes BEFORE dynamic :jobId */}
+          {/* Jobs & Freelancer Search */}
           <Route path="jobs" element={<Jobs />} />
+          <Route path="find-freelancer" element={<Jobs />} /> {/* NEW: Dedicated URL for Find Freelancer */}
           <Route path="jobs/post-job" element={<PostJob />} />
           <Route path="jobs/:jobId/proposals" element={<JobProposals />} />
           <Route path="jobs/:jobId" element={<JobDetail />} />
@@ -72,10 +73,10 @@ function App() {
           <Route path="connections" element={<Connections />} />
           <Route path="proposals/:proposalId/edit" element={<EditProposal />} />
           <Route path="jobs/:jobId/edit" element={<EditJob />} />
-          
+
           {/* Document Verification - after email verify, before full access */}
           <Route path="document-verification" element={<DocumentVerification />} />
-          
+
           {/* VivaRoom Routes */}
           <Route path="vivarooms" element={<VivaRoomsList />} />
           <Route path="vivaroom/:id" element={<AudioRoom />} />

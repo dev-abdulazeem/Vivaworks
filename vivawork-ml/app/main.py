@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import recommendations, risk, review, verification, feed, intelligence
+
+# 1. Import the new freelancer_recommendations router here
+from app.routers import recommendations, risk, review, verification, feed, intelligence, freelancer_recommendations
 
 app = FastAPI(
     title="VivaWork ML Service",
-    description="AI models for job matching, risk assessment, ID verification, feed ranking, and network intelligence",
-    version="1.2.0"
+    description="AI models for job matching, risk assessment, ID verification, feed ranking, network intelligence, and freelancer recommendations",
+    version="1.3.0"  # Bumped version to reflect new feature
 )
 
 # Allow your Node.js app to call this (adjust port as needed)
@@ -19,6 +21,10 @@ app.add_middleware(
 
 # Include routers
 app.include_router(recommendations.router, prefix="/ml", tags=["recommendations"])
+
+# 2. ADD THIS LINE to register the new freelancer search endpoint
+app.include_router(freelancer_recommendations.router, prefix="/ml", tags=["freelancer-recommendations"])
+
 app.include_router(risk.router, prefix="/ml/risk", tags=["risk"])
 app.include_router(review.router, prefix="/ml/review", tags=["human-review"])
 app.include_router(verification.router, prefix="/ml/verify", tags=["verification"])
@@ -30,9 +36,10 @@ async def health_check():
     return {
         "status": "healthy", 
         "service": "vivawork-ml", 
-        "version": "1.2.0",
+        "version": "1.3.0",
         "features": [
             "job_recommendations",
+            "freelancer_recommendations",  # <-- Added to health check
             "risk_assessment", 
             "human_review",
             "id_verification",
