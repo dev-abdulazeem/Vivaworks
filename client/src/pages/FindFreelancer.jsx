@@ -1,11 +1,9 @@
-// FindFreelancer.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../utils/api'
 import {
   MagnifyingGlassIcon,
   ArrowPathIcon,
-  CurrencyDollarIcon,
   StarIcon,
   CheckCircleIcon,
   ClockIcon,
@@ -61,6 +59,12 @@ function FindFreelancer() {
   const clearFilters = () => {
     setFilters({ skills: '', minRating: '', maxRate: '', isAvailable: '' })
     setPage(1)
+  }
+
+  // Helper to format Naira currency
+  const formatNaira = (amount) => {
+    if (!amount) return 'Negotiable'
+    return `₦${Number(amount).toLocaleString()}/hr`
   }
 
   return (
@@ -160,12 +164,12 @@ function FindFreelancer() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Max Hourly Rate ($)</label>
+                  <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Max Hourly Rate (₦)</label>
                   <input
                     type="number"
                     value={filters.maxRate}
                     onChange={(e) => { setFilters({ ...filters, maxRate: e.target.value }); setPage(1) }}
-                    placeholder="e.g. 50"
+                    placeholder="e.g. 15000"
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                   />
                 </div>
@@ -218,100 +222,112 @@ function FindFreelancer() {
           </div>
         ) : (
           <div className="space-y-3">
-            {freelancers.map((freelancer) => (
-              <div
-                key={freelancer.id}
-                className="bg-white rounded-2xl border border-slate-200 hover:border-emerald-200 hover:shadow-md hover:shadow-slate-100 transition-all duration-200 group"
-              >
-                <div className="p-5">
-                  <div className="flex items-start gap-4">
-                    <div className="shrink-0 hidden sm:block">
-                      {freelancer.avatar ? (
-                        <img src={freelancer.avatar} alt="" className="w-12 h-12 rounded-xl object-cover" />
-                      ) : (
-                        <div className="w-12 h-12 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
-                          {freelancer.firstName?.[0]}{freelancer.lastName?.[0]}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
-                        {freelancer.match_score > 0 && (
-                          <span className="px-2 py-0.5 bg-emerald-600 text-white text-[11px] font-bold rounded-md">
-                            {Math.round(freelancer.match_score * 100)}% Match
-                          </span>
-                        )}
-                        {freelancer.isAvailable && (
-                          <span className="px-2 py-0.5 bg-sky-50 text-sky-700 text-[11px] font-bold rounded-md border border-sky-100">
-                            Available
-                          </span>
+            {freelancers.map((freelancer) => {
+              // 🎯 Get real-time review count from backend
+              const reviewCount = freelancer.reviewCount || freelancer._count?.reviews || 0
+              const completedJobs = freelancer._count?.contracts || 0
+
+              return (
+                <div
+                  key={freelancer.id}
+                  className="bg-white rounded-2xl border border-slate-200 hover:border-emerald-200 hover:shadow-md hover:shadow-slate-100 transition-all duration-200 group"
+                >
+                  <div className="p-5">
+                    <div className="flex items-start gap-4">
+                      <div className="shrink-0 hidden sm:block">
+                        {freelancer.avatar ? (
+                          <img src={freelancer.avatar} alt="" className="w-12 h-12 rounded-xl object-cover" />
+                        ) : (
+                          <div className="w-12 h-12 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                            {freelancer.firstName?.[0]}{freelancer.lastName?.[0]}
+                          </div>
                         )}
                       </div>
-                      
-                      <Link to={`/freelancers/${freelancer.id}`} className="block group-hover:text-emerald-700 transition-colors">
-                        <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-                          {freelancer.firstName} {freelancer.lastName}
-                        </h3>
-                        <p className="text-sm text-slate-500 mt-0.5">{freelancer.headline}</p>
-                      </Link>
-
-                      {freelancer.skills && freelancer.skills.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-3">
-                          {freelancer.skills.slice(0, 5).map((skill) => (
-                            <span key={skill} className="px-2.5 py-1 bg-slate-50 text-slate-600 text-[11px] font-semibold rounded-lg border border-slate-100">
-                              {skill}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+                          {freelancer.match_score > 0 && (
+                            <span className="px-2 py-0.5 bg-emerald-600 text-white text-[11px] font-bold rounded-md">
+                              {Math.round(freelancer.match_score * 100)}% Match
                             </span>
-                          ))}
+                          )}
+                          {freelancer.isAvailable && (
+                            <span className="px-2 py-0.5 bg-sky-50 text-sky-700 text-[11px] font-bold rounded-md border border-sky-100">
+                              Available
+                            </span>
+                          )}
                         </div>
-                      )}
+                        
+                        <Link to={`/freelancers/${freelancer.id}`} className="block group-hover:text-emerald-700 transition-colors">
+                          <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
+                            {freelancer.firstName} {freelancer.lastName}
+                          </h3>
+                          <p className="text-sm text-slate-500 mt-0.5">{freelancer.headline}</p>
+                        </Link>
 
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-3 text-xs">
-                        {freelancer.rating && (
+                        {freelancer.skills && freelancer.skills.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mt-3">
+                            {freelancer.skills.slice(0, 5).map((skill) => (
+                              <span key={skill} className="px-2.5 py-1 bg-slate-50 text-slate-600 text-[11px] font-semibold rounded-lg border border-slate-100">
+                                {skill}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* 🎯 Real-time Stats Row */}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-3 text-xs">
+                          {/* Dynamic Rating & Real Review Count */}
                           <span className="flex items-center gap-1 font-semibold text-slate-700">
                             <StarIcon className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                            {freelancer.rating.toFixed(1)}
+                            {freelancer.rating ? freelancer.rating.toFixed(1) : 'New'}
+                            <span className="text-slate-400 font-normal">
+                              ({reviewCount} {reviewCount === 1 ? 'review' : 'reviews'})
+                            </span>
                           </span>
-                        )}
-                        {freelancer.hourlyRate && (
-                          <span className="flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100">
-                            <CurrencyDollarIcon className="w-3.5 h-3.5" />
-                            ${freelancer.hourlyRate}/hr
+                          
+                          {/* 🎯 Naira Currency Format */}
+                          {freelancer.hourlyRate && (
+                            <span className="flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100">
+                              {formatNaira(freelancer.hourlyRate)}
+                            </span>
+                          )}
+                          
+                          <span className="flex items-center gap-1 text-slate-400">
+                            <CheckCircleIcon className="w-3.5 h-3.5" />
+                            {completedJobs} {completedJobs === 1 ? 'Job' : 'Jobs'}
                           </span>
-                        )}
-                        <span className="flex items-center gap-1 text-slate-400">
-                          <CheckCircleIcon className="w-3.5 h-3.5" />
-                          {freelancer._count?.contracts || 0} Jobs
-                        </span>
-                        <span className="flex items-center gap-1 text-slate-400">
-                          <ClockIcon className="w-3.5 h-3.5" />
-                          {freelancer.responseRate || 0}% Response
-                        </span>
-                      </div>
+                          
+                          <span className="flex items-center gap-1 text-slate-400">
+                            <ClockIcon className="w-3.5 h-3.5" />
+                            {freelancer.responseRate || 0}% Response
+                          </span>
+                        </div>
 
-                      <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
-                        <p className="text-xs text-slate-500 line-clamp-1 max-w-md">
-                          {freelancer.bio || 'No bio provided.'}
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Link
-                            to={`/freelancers/${freelancer.id}`}
-                            className="px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 transition-colors"
-                          >
-                            View Profile
-                          </Link>
-                          <Link
-                            to={`/jobs/post?invite=${freelancer.id}`}
-                            className="px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition-colors shadow-sm"
-                          >
-                            Invite to Job
-                          </Link>
+                        <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
+                          <p className="text-xs text-slate-500 line-clamp-1 max-w-md">
+                            {freelancer.bio || 'No bio provided.'}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Link
+                              to={`/freelancers/${freelancer.id}`}
+                              className="px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 transition-colors"
+                            >
+                              View Profile
+                            </Link>
+                            <Link
+                              to={`/jobs/post?invite=${freelancer.id}`}
+                              className="px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition-colors shadow-sm"
+                            >
+                              Invite to Job
+                            </Link>
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
 
             {freelancers.length === 0 && !isLoading && (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 sm:p-16 text-center">

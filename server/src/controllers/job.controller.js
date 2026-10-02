@@ -27,11 +27,10 @@ const createJob = async (req, res) => {
         linkTitle: linkTitle ? sanitizeInput(linkTitle) : null,
         linkImage: linkImage ? sanitizeInput(linkImage) : null,
         linkDesc: linkDesc ? sanitizeInput(linkDesc) : null,
-        featured: false, // Default: not featured
+        featured: false,
       },
     });
 
-      // Sync to ML model in background (don't await, non-blocking)
     mlService.loadJobs([{
       id: job.id,
       title: job.title,
@@ -40,13 +39,12 @@ const createJob = async (req, res) => {
       budget: job.budget,
       posted_date: job.createdAt
     }]).catch(err => console.error('ML sync failed:', err.message));
-    
+
     return res.status(201).json({
       message: 'Job posted successfully',
       job,
       ml_indexed: true
     });
-    
   } catch (error) {
     console.error('Create job error:', error);
     return res.status(500).json({ message: 'Failed to post job', code: 'JOB_CREATE_ERROR' });
@@ -54,21 +52,30 @@ const createJob = async (req, res) => {
 };
 
 // ────────────────────────────────────────────────────────────────
-// GET ALL JOBS (with filters)
+// GET ALL JOBS (with filters) - FIXED NaN BUG
 // ────────────────────────────────────────────────────────────────
 const getJobs = async (req, res) => {
   try {
     const { status, skill, minBudget, maxBudget, location, page = 1, limit = 10 } = req.query;
-
     const where = {};
 
     if (status) where.status = status;
     if (skill) where.skills = { has: skill };
     if (location) where.location = { contains: location, mode: 'insensitive' };
+    
+    // ✅ FIX: Prevent NaN errors in Prisma when budget filters are empty strings
     if (minBudget || maxBudget) {
       where.budget = {};
-      if (minBudget) where.budget.gte = parseFloat(minBudget);
-      if (maxBudget) where.budget.lte = parseFloat(maxBudget);
+      if (minBudget && !isNaN(parseFloat(minBudget))) {
+        where.budget.gte = parseFloat(minBudget);
+      }
+      if (maxBudget && !isNaN(parseFloat(maxBudget))) {
+        where.budget.lte = parseFloat(maxBudget);
+      }
+      // If budget object is empty after checks, delete it to avoid Prisma errors
+      if (Object.keys(where.budget).length === 0) {
+        delete where.budget;
+      }
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -111,15 +118,14 @@ const getJobs = async (req, res) => {
   }
 };
 
-  // ────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────
 // GET RECOMMENDED JOBS (ML-POWERED)
 // ────────────────────────────────────────────────────────────────
 const getRecommendedJobs = async (req, res) => {
   try {
     const userId = req.user.id;
     const limit = Math.min(20, parseInt(req.query.limit) || 10);
-    
-    // Get user profile for ML
+
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -130,12 +136,11 @@ const getRecommendedJobs = async (req, res) => {
         earningBadge: { select: { tier: true } }
       }
     });
-    
+
     if (!user?.isFreelancer) {
       return res.status(400).json({ message: 'Only freelancers get recommendations', code: 'NOT_FREELANCER' });
     }
-    
-    // Get open jobs
+
     const jobs = await prisma.job.findMany({
       where: { status: 'open' },
       include: {
@@ -150,15 +155,14 @@ const getRecommendedJobs = async (req, res) => {
         },
         proposals: { select: { id: true } },
       },
-      take: 50, // Get more for ML to rank
+      take: 50,
       orderBy: { createdAt: 'desc' },
     });
-    
+
     if (jobs.length === 0) {
       return res.status(200).json({ jobs: [], message: 'No open jobs available' });
     }
-    
-    // Prepare jobs for ML
+
     const jobsForML = jobs.map(j => ({
       id: j.id,
       title: j.title,
@@ -166,32 +170,29 @@ const getRecommendedJobs = async (req, res) => {
       skills: j.skills || [],
       budget: j.budget || 0,
       posted_date: j.createdAt,
-      client_rating: 4.5, // TODO: Calculate from reviews
+      client_rating: 4.5,
       proposal_count: j.proposals.length
     }));
-    
-    // Get user's completed jobs for context
+
     const completedContracts = await prisma.contract.findMany({
       where: { freelancerId: userId, status: 'completed' },
       select: { job: { select: { title: true } } },
       take: 10
     });
-    
+
     const userProfile = {
       id: userId,
       skills: user.skills || [],
       bio: user.bio || '',
       headline: user.headline || '',
-      categories: [], // Extract from skills/industry
+      categories: [],
       experienceLevel: user.earningBadge?.tier === 'legend' ? 'expert' : 
                        user.earningBadge?.tier === 'top_rated' ? 'intermediate' : 'beginner',
       completedJobs: completedContracts.map(c => c.job?.title).filter(Boolean)
     };
-    
-    // Get ML recommendations
+
     const recommendations = await mlService.getJobRecommendations(userProfile);
-    
-    // Map back to full job objects
+
     const jobMap = new Map(jobs.map(j => [j.id, j]));
     const recommendedJobs = recommendations
       .map(rec => ({
@@ -199,22 +200,20 @@ const getRecommendedJobs = async (req, res) => {
         match_score: rec.match_score,
         match_reasons: rec.match_reasons
       }))
-      .filter(j => j.id) // Remove any not found
+      .filter(j => j.id)
       .slice(0, limit);
-    
+
     return res.status(200).json({
       jobs: recommendedJobs,
       ml_powered: true,
       count: recommendedJobs.length
     });
-    
   } catch (error) {
     console.error('Get recommended jobs error:', error);
-    // Fallback to regular jobs if ML fails
-    return res.status(500).json({ 
-      message: 'Failed to get recommendations', 
+    return res.status(500).json({
+      message: 'Failed to get recommendations',
       code: 'RECOMMEND_ERROR',
-      fallback: true 
+      fallback: true
     });
   }
 };
@@ -225,14 +224,13 @@ const getRecommendedJobs = async (req, res) => {
 const getFeaturedJobs = async (req, res) => {
   try {
     const { limit = 10, page = 1 } = req.query;
-
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const [jobs, total] = await Promise.all([
       prisma.job.findMany({
         where: {
-          featured: true,  // Only get featured jobs
-          status: 'open',  // Only open jobs
+          featured: true,
+          status: 'open',
         },
         include: {
           buyer: {
@@ -294,7 +292,6 @@ const getFeaturedJobs = async (req, res) => {
 const getJobById = async (req, res) => {
   try {
     const { jobId } = req.params;
-
     const job = await prisma.job.findUnique({
       where: { id: jobId },
       include: {
@@ -355,7 +352,6 @@ const updateJob = async (req, res) => {
       return res.status(403).json({ message: 'Not authorized', code: 'UNAUTHORIZED' });
     }
 
-    // Only allow editing if job is open or in_progress
     if (job.status === 'completed' || job.status === 'cancelled') {
       return res.status(400).json({ message: 'Cannot edit completed or cancelled jobs', code: 'JOB_CLOSED' });
     }
@@ -395,7 +391,6 @@ const updateJob = async (req, res) => {
 const deleteJob = async (req, res) => {
   try {
     const { jobId } = req.params;
-
     const existingJob = await prisma.job.findUnique({
       where: { id: jobId },
     });
@@ -425,8 +420,8 @@ const deleteJob = async (req, res) => {
 const getMyJobs = async (req, res) => {
   try {
     const { status, page = 1, limit = 10 } = req.query;
-
     const where = { buyerId: req.user.id };
+
     if (status) where.status = status;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -472,7 +467,6 @@ const markJobFeatured = async (req, res) => {
     const { jobId } = req.params;
     const { featured } = req.body;
 
-    // Admin check
     if (!req.user.isAdmin) {
       return res.status(403).json({ message: 'Only admins can feature jobs', code: 'ADMIN_ONLY' });
     }
