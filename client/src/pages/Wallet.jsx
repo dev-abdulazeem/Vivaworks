@@ -24,6 +24,10 @@ import {
   Banknote,
   RotateCcw,
   Lock,
+  Bitcoin,
+  Copy,
+  Check,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
@@ -64,6 +68,15 @@ const WalletPage = () => {
   const [savedCards, setSavedCards] = useState([]);
   const [cardsLoading, setCardsLoading] = useState(false);
   const [verifyingPayment, setVerifyingPayment] = useState(false);
+
+  // ═══ NEW: Crypto Deposit state ═══
+  const [depositMethod, setDepositMethod] = useState(null); // null, 'fiat', 'crypto'
+  const [cryptoStep, setCryptoStep] = useState(1); // 1: form, 2: instructions
+  const [cryptoCurrency, setCryptoCurrency] = useState('usdttrc20');
+  const [cryptoAmount, setCryptoAmount] = useState('');
+  const [cryptoLoading, setCryptoLoading] = useState(false);
+  const [cryptoDepositData, setCryptoDepositData] = useState(null);
+  const [copiedAddress, setCopiedAddress] = useState(false);
 
   const processedRefs = useRef(new Set());
   const verifyAttempted = useRef(false);
@@ -204,6 +217,45 @@ const WalletPage = () => {
     }
   };
 
+  // ═══ NEW: Handle Crypto Deposit ═══
+  const handleCryptoDeposit = async (e) => {
+    e.preventDefault();
+    const amount = parseFloat(cryptoAmount);
+    
+    // UPDATED: Raised minimum to 5000 to prevent NowPayments AMOUNT_MINIMAL_ERROR
+    if (!amount || isNaN(amount) || amount < 5000) {
+      toast.error('Minimum crypto deposit is ₦5,000 to meet network minimum limits.');
+      return;
+    }
+    try {
+      setCryptoLoading(true);
+      const response = await api.post('/wallet/crypto-deposit', { 
+        amount, 
+        currency: cryptoCurrency 
+      });
+      setCryptoDepositData(response.data);
+      setCryptoStep(2);
+      toast.success('Deposit address generated!');
+    } catch (err) {
+      console.error('Crypto deposit error:', err);
+      // UPDATED: Show the specific error message from the backend if it exists
+      const errorMsg = err.response?.data?.message || 'Failed to generate deposit address';
+      toast.error(errorMsg);
+    } finally {
+      setCryptoLoading(false);
+    }
+  };
+
+  // ═══ NEW: Copy Address Helper ═══
+  const copyAddress = () => {
+    if (cryptoDepositData?.payAddress) {
+      navigator.clipboard.writeText(cryptoDepositData.payAddress);
+      setCopiedAddress(true);
+      toast.success('Address copied to clipboard!');
+      setTimeout(() => setCopiedAddress(false), 2000);
+    }
+  };
+
   const deleteCard = async (cardId) => {
     if (!window.confirm('Remove this card?')) return;
     try {
@@ -326,6 +378,12 @@ const WalletPage = () => {
   const openTopUpModal = () => {
     setShowTopUpModal(true);
     setTopUpAmount('');
+    setDepositMethod(null);
+    setCryptoStep(1);
+    setCryptoCurrency('usdttrc20');
+    setCryptoAmount('');
+    setCryptoDepositData(null);
+    setCopiedAddress(false);
   };
 
   const cooldownHoursLeft = useMemo(() => {
@@ -338,6 +396,8 @@ const WalletPage = () => {
 
   const getTransactionIcon = (type) => {
     switch (type) {
+      case 'crypto_deposit':
+        return <Bitcoin className="w-4 h-4 text-orange-500" />;
       case 'credit':
       case 'deposit':
       case 'escrow_deposit':
@@ -359,6 +419,8 @@ const WalletPage = () => {
 
   const getTransactionColor = (type) => {
     switch (type) {
+      case 'crypto_deposit':
+        return 'text-orange-500';
       case 'credit':
       case 'deposit':
       case 'release':
@@ -378,7 +440,7 @@ const WalletPage = () => {
 
   const formatAmount = (amount, type) => {
     const prefix =
-      type === 'credit' || type === 'deposit' || type === 'release' || type === 'contract_payment' || type === 'refund'
+      type === 'credit' || type === 'deposit' || type === 'crypto_deposit' || type === 'release' || type === 'contract_payment' || type === 'refund'
         ? '+'
         : type === 'debit' || type === 'withdrawal' || type === 'escrow_deposit'
         ? '-'
@@ -388,6 +450,8 @@ const WalletPage = () => {
 
   const getTransactionBgColor = (type) => {
     switch (type) {
+      case 'crypto_deposit':
+        return 'bg-orange-50';
       case 'credit':
       case 'deposit':
       case 'release':
@@ -891,8 +955,16 @@ const WalletPage = () => {
 
             <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-4 flex items-center justify-between shrink-0">
               <div className="min-w-0">
-                <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Add Money</h2>
-                <p className="text-sm text-gray-500">Fund your wallet securely</p>
+                <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
+                  {depositMethod === null && 'Add Money'}
+                  {depositMethod === 'fiat' && 'Pay with Card / Bank'}
+                  {depositMethod === 'crypto' && (cryptoStep === 1 ? 'Pay with Crypto' : 'Send Crypto')}
+                </h2>
+                <p className="text-sm text-gray-500">
+                  {depositMethod === null && 'Choose your preferred deposit method'}
+                  {depositMethod === 'fiat' && 'Fund your wallet securely via Paystack'}
+                  {depositMethod === 'crypto' && (cryptoStep === 1 ? 'Generate a unique deposit address' : 'Send the exact amount to the address below')}
+                </p>
               </div>
               <button onClick={() => setShowTopUpModal(false)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors shrink-0">
                 <X className="w-5 h-5 text-gray-400" />
@@ -900,89 +972,270 @@ const WalletPage = () => {
             </div>
 
             <div className="overflow-y-auto p-4 sm:p-6 space-y-5">
-              <div className="bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
-                    <Wallet className="w-5 h-5 text-emerald-600" />
+              
+              {/* ═══ METHOD SELECTION ═══ */}
+              {depositMethod === null && (
+                <div className="space-y-4">
+                  <div className="bg-gray-50 rounded-xl p-4 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+                        <Wallet className="w-5 h-5 text-emerald-600" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500">Current Balance</p>
+                        <p className="text-lg font-bold text-gray-900 truncate">₦{(parseFloat(wallet?.balance) || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Current Balance</p>
-                    <p className="text-lg font-bold text-gray-900 truncate">₦{(parseFloat(wallet?.balance) || 0).toLocaleString()}</p>
-                  </div>
-                </div>
-              </div>
 
-              <form onSubmit={handleTopUp} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount (₦)</label>
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₦</span>
-                    <input
-                      type="number"
-                      value={topUpAmount}
-                      onChange={(e) => setTopUpAmount(e.target.value)}
-                      placeholder="Enter amount"
-                      min="100"
-                      step="0.01"
-                      className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-base sm:text-lg font-semibold"
-                      required
-                      autoFocus
-                    />
-                  </div>
-                  <p className="text-xs text-gray-400 mt-1.5">Minimum top-up: ₦100</p>
-                </div>
+                  <button
+                    onClick={() => setDepositMethod('fiat')}
+                    className="w-full flex items-center gap-4 p-4 border-2 border-gray-200 hover:border-emerald-500 hover:bg-emerald-50 rounded-xl transition-all text-left group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center shrink-0 group-hover:bg-emerald-100 transition-colors">
+                      <CreditCard className="w-6 h-6 text-blue-600 group-hover:text-emerald-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-gray-900">Bank Card / Transfer</p>
+                      <p className="text-xs text-gray-500 mt-0.5">Instant deposit via Paystack (NGN)</p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-emerald-600" />
+                  </button>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[1000, 5000, 10000, 50000].map((amt) => (
+                  <button
+                    onClick={() => setDepositMethod('crypto')}
+                    className="w-full flex items-center gap-4 p-4 border-2 border-gray-200 hover:border-orange-500 hover:bg-orange-50 rounded-xl transition-all text-left group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center shrink-0 group-hover:bg-orange-100 transition-colors">
+                      <Bitcoin className="w-6 h-6 text-orange-500" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-gray-900">Cryptocurrency</p>
+                      <p className="text-xs text-gray-500 mt-0.5">USDT, BTC, ETH & more (Auto-converted to NGN)</p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-orange-500" />
+                  </button>
+                </div>
+              )}
+
+              {/* ═══ FIAT DEPOSIT (Original Code) ═══ */}
+              {depositMethod === 'fiat' && (
+                <>
+                  <button 
+                    onClick={() => setDepositMethod(null)} 
+                    className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-2"
+                  >
+                    <ChevronRight className="w-4 h-4 rotate-180" /> Back to methods
+                  </button>
+
+                  <form onSubmit={handleTopUp} className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount (₦)</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₦</span>
+                        <input
+                          type="number"
+                          value={topUpAmount}
+                          onChange={(e) => setTopUpAmount(e.target.value)}
+                          placeholder="Enter amount"
+                          min="100"
+                          step="0.01"
+                          className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-base sm:text-lg font-semibold"
+                          required
+                          autoFocus
+                        />
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1.5">Minimum top-up: ₦100</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[1000, 5000, 10000, 50000].map((amt) => (
+                        <button
+                          key={amt}
+                          type="button"
+                          onClick={() => setTopUpAmount(amt.toString())}
+                          className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors active:scale-[0.98] sm:active:scale-100 ${
+                            topUpAmount === amt.toString()
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-gray-50 text-gray-700 hover:bg-emerald-50 hover:text-emerald-700'
+                          }`}
+                        >
+                          ₦{amt.toLocaleString()}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex items-start gap-2 bg-emerald-50 rounded-lg p-3">
+                      <Shield className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-emerald-700">
+                        Secured by Paystack. Your card details are encrypted and never stored on our servers.
+                      </p>
+                    </div>
+
                     <button
-                      key={amt}
-                      type="button"
-                      onClick={() => setTopUpAmount(amt.toString())}
-                      className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors active:scale-[0.98] sm:active:scale-100 ${
-                        topUpAmount === amt.toString()
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-gray-50 text-gray-700 hover:bg-emerald-50 hover:text-emerald-700'
-                      }`}
+                      type="submit"
+                      disabled={topUpLoading || !topUpAmount}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-3.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium disabled:opacity-50 text-sm active:scale-[0.98] sm:active:scale-100"
                     >
-                      ₦{amt.toLocaleString()}
+                      {topUpLoading ? (<><Loader2 className="w-4 h-4 animate-spin" />Processing...</>) : (<><Banknote className="w-4 h-4" />Pay ₦{topUpAmount ? parseFloat(topUpAmount).toLocaleString() : '0'}</>)}
                     </button>
-                  ))}
-                </div>
+                  </form>
 
-                <div className="flex items-start gap-2 bg-emerald-50 rounded-lg p-3">
-                  <Shield className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <p className="text-xs text-emerald-700">
-                    Secured by Paystack. Your card details are encrypted and never stored on our servers.
-                  </p>
-                </div>
+                  {savedCards.length > 0 && (
+                    <div className="border-t border-gray-100 pt-4">
+                      <p className="text-sm font-medium text-gray-700 mb-3">Your saved cards</p>
+                      <div className="space-y-2">
+                        {savedCards.map((card) => (
+                          <div key={card.id} className="w-full flex items-center gap-3 p-3 border border-gray-200 rounded-lg">
+                            <CreditCard className="w-5 h-5 text-emerald-600 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-gray-900 truncate">{card.brand} •••• {card.last4}</p>
+                              <p className="text-xs text-gray-400">Expires {card.expiryMonth}/{card.expiryYear}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-400 mt-2">
+                        Enter an amount above and pay — Paystack will offer your saved card at checkout.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
 
-                <button
-                  type="submit"
-                  disabled={topUpLoading || !topUpAmount}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium disabled:opacity-50 text-sm active:scale-[0.98] sm:active:scale-100"
-                >
-                  {topUpLoading ? (<><Loader2 className="w-4 h-4 animate-spin" />Processing...</>) : (<><Banknote className="w-4 h-4" />Pay ₦{topUpAmount ? parseFloat(topUpAmount).toLocaleString() : '0'}</>)}
-                </button>
-              </form>
+              {/* ═══ CRYPTO DEPOSIT ═══ */}
+              {depositMethod === 'crypto' && (
+                <>
+                  <button 
+                    onClick={() => {
+                      if (cryptoStep === 2) {
+                        setCryptoStep(1);
+                        setCryptoDepositData(null);
+                      } else {
+                        setDepositMethod(null);
+                      }
+                    }} 
+                    className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-2"
+                  >
+                    <ChevronRight className="w-4 h-4 rotate-180" /> {cryptoStep === 2 ? 'Back to details' : 'Back to methods'}
+                  </button>
 
-              {savedCards.length > 0 && (
-                <div className="border-t border-gray-100 pt-4">
-                  <p className="text-sm font-medium text-gray-700 mb-3">Your saved cards</p>
-                  <div className="space-y-2">
-                    {savedCards.map((card) => (
-                      <div key={card.id} className="w-full flex items-center gap-3 p-3 border border-gray-200 rounded-lg">
-                        <CreditCard className="w-5 h-5 text-emerald-600 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{card.brand} •••• {card.last4}</p>
-                          <p className="text-xs text-gray-400">Expires {card.expiryMonth}/{card.expiryYear}</p>
+                  {cryptoStep === 1 && (
+                    <form onSubmit={handleCryptoDeposit} className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Select Cryptocurrency</label>
+                        <select
+                          value={cryptoCurrency}
+                          onChange={(e) => setCryptoCurrency(e.target.value)}
+                          className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none text-sm bg-white"
+                        >
+                          <option value="usdttrc20">USDT (TRC20) - Low Fees</option>
+                          <option value="usdt">USDT (ERC20)</option>
+                          <option value="btc">Bitcoin (BTC)</option>
+                          <option value="eth">Ethereum (ETH)</option>
+                          <option value="bnbbsc">BNB (BSC)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Amount to Add (₦)</label>
+                        <div className="relative">
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₦</span>
+                          <input
+                            type="number"
+                            value={cryptoAmount}
+                            onChange={(e) => setCryptoAmount(e.target.value)}
+                            placeholder="e.g. 5000"
+                            min="5000"
+                            step="0.01"
+                            className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none text-base sm:text-lg font-semibold"
+                            required
+                          />
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1.5">Minimum crypto deposit: ₦5,000 (due to network limits). We will calculate the exact crypto amount for you.</p>
+                      </div>
+
+                      <div className="flex items-start gap-2 bg-orange-50 rounded-lg p-3">
+                        <AlertCircle className="w-4 h-4 text-orange-600 shrink-0 mt-0.5" />
+                        <p className="text-xs text-orange-700">
+                          Please ensure you are sending the correct network token (e.g., TRC20 for USDT TRC20). Sending the wrong network will result in permanent loss of funds.
+                        </p>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={cryptoLoading || !cryptoAmount}
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-3.5 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors font-medium disabled:opacity-50 text-sm active:scale-[0.98] sm:active:scale-100"
+                      >
+                        {cryptoLoading ? (<><Loader2 className="w-4 h-4 animate-spin" />Generating Address...</>) : (<><Zap className="w-4 h-4" />Get Deposit Address</>)}
+                      </button>
+                    </form>
+                  )}
+
+                  {cryptoStep === 2 && cryptoDepositData && (
+                    <div className="space-y-5">
+                      <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-center space-y-2">
+                        <p className="text-xs text-orange-700 uppercase font-semibold tracking-wide">Send Exactly</p>
+                        <p className="text-2xl font-bold text-gray-900 break-all">
+                          {cryptoDepositData.payAmount} <span className="text-orange-600">{cryptoDepositData.payCurrency.toUpperCase()}</span>
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          (Approx. ₦{parseFloat(cryptoDepositData.priceAmount || cryptoAmount).toLocaleString()})
+                        </p>
+                      </div>
+
+                      <div className="flex justify-center">
+                        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
+                          <img 
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${cryptoDepositData.payAddress}`} 
+                            alt="Deposit QR Code" 
+                            className="w-40 h-40"
+                          />
                         </div>
                       </div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-gray-400 mt-2">
-                    Enter an amount above and pay — Paystack will offer your saved card at checkout.
-                  </p>
-                </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5 text-center">Deposit Address</label>
+                        <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg p-2">
+                          <code className="flex-1 text-xs sm:text-sm font-mono text-gray-800 break-all px-2 py-1">
+                            {cryptoDepositData.payAddress}
+                          </code>
+                          <button
+                            onClick={copyAddress}
+                            className="p-2 bg-white border border-gray-200 rounded-md hover:bg-gray-100 transition-colors shrink-0"
+                            title="Copy address"
+                          >
+                            {copiedAddress ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4 text-gray-600" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="text-xs text-amber-800">
+                          <p className="font-semibold mb-1">Important:</p>
+                          <ul className="list-disc pl-4 space-y-1">
+                            <li>Send <strong>exactly</strong> the amount shown above.</li>
+                            <li>Use the <strong>correct network</strong> ({cryptoDepositData.payCurrency.toUpperCase()}).</li>
+                            <li>Your wallet will be credited automatically once the transaction is confirmed on the blockchain (usually 1-10 mins).</li>
+                          </ul>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setShowTopUpModal(false);
+                          toast.success('Awaiting blockchain confirmation. You can close this and your wallet will update automatically.');
+                          setTimeout(fetchWallet, 5000); 
+                        }}
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-3.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium text-sm active:scale-[0.98] sm:active:scale-100"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        I've Sent the Funds / Close
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const axios = require('axios'); // Make sure to run: npm install axios
 const { prisma } = require('../config/database');
 const { generateVerificationCode, getVerificationExpiry, sendWithdrawalOtpEmail } = require('../utils/email');
 const { resolveBankAccount, listBanks } = require('../utils/paystack');
@@ -13,6 +14,11 @@ const MAX_OTP_ATTEMPTS = 3;
 const MAX_OTP_REQUESTS_PER_DAY = 3;
 const MIN_WITHDRAWAL = 2000;
 const MAX_TOPUP_AMOUNT = parseFloat(process.env.MAX_TOPUP_AMOUNT || '5000000');
+
+// ─── NOWPAYMENTS CONFIG ───
+const NOWPAYMENTS_API_KEY = process.env.NOWPAYMENTS_API_KEY;
+const NOWPAYMENTS_IPN_SECRET = process.env.NOWPAYMENTS_IPN_SECRET;
+const NOWPAYMENTS_BASE_URL = 'https://api.nowpayments.io/v1';
 
 // ─── AUDIT LOG HELPER ───
 const audit = async (userId, action, metadata = {}, ipAddress = null) => {
@@ -679,6 +685,199 @@ const paystackWebhook = async (req, res) => {
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════
+// ─── NEW: NOWPAYMENTS CRYPTO DEPOSIT & WEBHOOK ─────────────────────
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── CREATE CRYPTO DEPOSIT ───
+const createCryptoDeposit = async (req, res) => {
+  try {
+    const { currency, amount } = req.body; // amount in NGN, currency e.g., 'usdttrc20', 'btc'
+
+    const depositAmount = parseFloat(amount);
+    if (!currency || !depositAmount || depositAmount <= 0) {
+      return res.status(400).json({ message: 'Valid currency and amount required', code: 'INVALID_INPUT' });
+    }
+
+    let wallet = await prisma.wallet.findUnique({ where: { userId: req.user.id } });
+    if (!wallet) {
+      wallet = await prisma.wallet.create({ data: { userId: req.user.id, balance: 0 } });
+    }
+
+    const reference = `VW-CRYPTO-${Date.now()}-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+
+    // Call NowPayments API to create invoice
+    const nowPaymentsResponse = await axios.post(
+      `${NOWPAYMENTS_BASE_URL}/payment`,
+      {
+        price_amount: depositAmount,
+        price_currency: 'ngn',
+        pay_currency: currency.toLowerCase(),
+        order_id: reference,
+        ipn_callback_url: `${process.env.API_URL || 'http://localhost:5000'}/api/wallet/nowpayments-webhook`,
+      },
+      {
+        headers: {
+          'x-api-key': NOWPAYMENTS_API_KEY,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const npData = nowPaymentsResponse.data;
+
+    // Create pending transaction record
+    await prisma.transaction.create({
+      data: {
+        walletId: wallet.id,
+        type: 'crypto_deposit',
+        amount: toDecimal(depositAmount),
+        description: `Crypto deposit (${currency.toUpperCase()}) pending`,
+        status: 'pending',
+        nowPaymentsRef: String(npData.payment_id),
+        metadata: {
+          payAddress: npData.pay_address,
+          payAmount: npData.pay_amount,
+          payCurrency: npData.pay_currency,
+          priceAmount: npData.price_amount,
+          priceCurrency: npData.price_currency,
+        },
+      },
+    });
+
+    await audit(req.user.id, 'crypto_deposit_initialized', { reference, currency, amount: depositAmount }, getClientIp(req));
+
+    return res.status(200).json({
+      message: 'Crypto deposit initialized',
+      reference,
+      paymentId: npData.payment_id,
+      payAddress: npData.pay_address,
+      payAmount: npData.pay_amount,
+      payCurrency: npData.pay_currency,
+      validUntil: npData.expiration_estimate_date,
+    });
+
+  } catch (error) {
+    const npError = error.response?.data;
+    console.error('Create crypto deposit error:', npError || error.message);
+    
+    // UPDATED: Handle NowPayments minimum amount error gracefully
+    if (npError?.code === 'AMOUNT_MINIMAL_ERROR') {
+      return res.status(400).json({ 
+        message: 'The deposit amount is too low for this cryptocurrency network. Please increase the amount (e.g., try at least ₦5,000) or select a different coin.', 
+        code: 'AMOUNT_TOO_LOW' 
+      });
+    }
+    
+    return res.status(500).json({ message: 'Failed to initialize crypto deposit', code: 'CRYPTO_DEPOSIT_ERROR' });
+  }
+};
+
+// ─── NOWPAYMENTS WEBHOOK (IPN) ───
+const nowPaymentsWebhook = async (req, res) => {
+  try {
+    const signature = req.headers['x-nowpayments-sig'];
+    const rawBody = req.body; // MUST be raw buffer
+
+    if (!NOWPAYMENTS_IPN_SECRET) {
+      console.error('NOWPAYMENTS_IPN_SECRET not configured');
+      return res.status(500).send();
+    }
+    if (!signature) {
+      return res.status(400).send('Missing signature');
+    }
+
+    // 1. Verify HMAC Signature
+    const expectedSignature = crypto.createHmac('sha512', NOWPAYMENTS_IPN_SECRET).update(rawBody).digest('hex');
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSignature);
+    
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      console.warn('Invalid NowPayments webhook signature');
+      return res.status(400).send('Invalid signature');
+    }
+
+    // 2. Acknowledge receipt immediately to prevent NowPayments from retrying
+    res.status(200).send('OK');
+
+    // 3. Process the event
+    const event = JSON.parse(rawBody.toString('utf8'));
+    
+    if (event.payment_status === 'finished' || event.payment_status === 'partially_paid') {
+      const paymentId = String(event.payment_id);
+      const priceAmount = parseFloat(event.price_amount); // The NGN amount to credit
+
+      // Find transaction idempotently
+      const transaction = await prisma.transaction.findFirst({
+        where: { nowPaymentsRef: paymentId },
+        include: { wallet: true },
+      });
+
+      if (!transaction) {
+        console.error('Transaction not found for NowPayments ID:', paymentId);
+        return;
+      }
+
+      if (transaction.status === 'completed') {
+        console.log('Transaction already processed:', paymentId);
+        return;
+      }
+
+      // 4. Atomic Credit (Same secure pattern as your Paystack logic)
+      const result = await prisma.$transaction(async (tx) => {
+        // Lock the wallet row
+        await tx.$queryRaw`SELECT * FROM wallets WHERE id = ${transaction.walletId} FOR UPDATE`;
+        
+        // Update transaction status
+        const updated = await tx.transaction.updateMany({
+          where: { id: transaction.id, status: 'pending' },
+          data: { 
+            status: 'completed', 
+            description: `Crypto deposit (${event.pay_currency}) completed`,
+            metadata: {
+              ...transaction.metadata,
+              actuallyPaid: event.actually_paid,
+              payoutHash: event.payout_hash,
+              paymentStatus: event.payment_status
+            }
+          },
+        });
+        
+        if (updated.count === 0) return null; // Already processed by another thread
+
+        // Credit the wallet
+        await tx.wallet.update({
+          where: { id: transaction.walletId },
+          data: { balance: { increment: toDecimal(priceAmount) } },
+        });
+
+        return true;
+      });
+
+      if (result) {
+        await prisma.notification.create({
+          data: {
+            userId: transaction.wallet.userId,
+            type: 'deposit_success',
+            title: 'Crypto Deposit Received',
+            message: `Your crypto deposit of ${event.actually_paid} ${event.pay_currency} (₦${priceAmount.toLocaleString()}) has been credited.`,
+            link: '/wallet',
+          },
+        });
+        await audit(transaction.wallet.userId, 'crypto_deposit_completed', { paymentId, amount: priceAmount });
+      }
+    } else if (event.payment_status === 'failed' || event.payment_status === 'refunded') {
+       await prisma.transaction.updateMany({
+         where: { nowPaymentsRef: String(event.payment_id) },
+         data: { status: 'failed', description: `Crypto deposit ${event.payment_status}` }
+       });
+    }
+
+  } catch (error) {
+    console.error('NowPayments webhook error:', error);
+  }
+};
+
 // ─── GET SAVED CARDS ───
 const getSavedCards = async (req, res) => {
   try {
@@ -845,7 +1044,6 @@ const sendTip = async (req, res) => {
   }
 };
 
-
 module.exports = {
   getWallet,
   getTransactionHistory,
@@ -856,7 +1054,9 @@ module.exports = {
   initializeTopUp,
   verifyTopUp,
   paystackWebhook,
+  createCryptoDeposit,      
+  nowPaymentsWebhook,      
   getSavedCards,
   deleteSavedCard,
   sendTip,
-};      
+};

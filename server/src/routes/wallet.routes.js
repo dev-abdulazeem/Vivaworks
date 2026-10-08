@@ -13,9 +13,11 @@ const {
   getSavedCards,
   deleteSavedCard,
   sendTip,
+  createCryptoDeposit, // ADDED
 } = require('../controllers/wallet.controller');
 const { authenticate, requireVerified } = require('../middleware/auth');
 const { withdrawalRateLimit } = require('../middleware/security');
+const { prisma } = require('../config/database'); // ADDED for tip-status route
 
 // ─── EXISTING ROUTES ───
 router.get('/', authenticate, requireVerified, getWallet);
@@ -29,6 +31,9 @@ router.post('/confirm-withdrawal', authenticate, requireVerified, body('code').i
 // ═══ NEW: TOP-UP / ADD MONEY ROUTES ═══
 router.post('/topup', authenticate, requireVerified, body('amount').isFloat({ min: 100 }), initializeTopUp);
 router.post('/verify-topup', authenticate, requireVerified, body('reference').notEmpty(), verifyTopUp);
+
+// ═══ NEW: CRYPTO DEPOSIT ROUTE ═══
+router.post('/crypto-deposit', authenticate, requireVerified, body('amount').isFloat({ min: 100 }), body('currency').isString().notEmpty(), createCryptoDeposit);
 
 // ═══ NEW: SAVED CARDS ROUTES ═══
 router.get('/cards', authenticate, requireVerified, getSavedCards);

@@ -48,6 +48,9 @@ const verificationRoutes = require('./routes/verification.routes');
 const disputeRoutes = require('./routes/dispute.routes');
 const audioRoomRoutes = require('./routes/audioRoom.routes');
 
+// ─── CONTROLLERS (for direct webhook mounting) ─────────────────────
+const { nowPaymentsWebhook } = require('./controllers/wallet.controller');
+
 // ─── CRON JOB FUNCTIONS ────────────────────────────────────────────
 const {
   processMaturedPayouts,
@@ -69,6 +72,13 @@ app.use(cors(corsOptions));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(cookieParser());
 app.use(compression());
+
+// ═══════════════════════════════════════════════════════════════════
+// ─── RAW WEBHOOK ROUTES (MUST BE BEFORE express.json()) ────────────
+// ═══════════════════════════════════════════════════════════════════
+// NowPayments requires the raw request body buffer to verify the HMAC signature.
+// If express.json() runs first, it consumes the stream and signature verification fails.
+app.post('/api/wallet/nowpayments-webhook', express.raw({ type: 'application/json' }), nowPaymentsWebhook);
 
 // ─── BODY PARSERS ──────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
